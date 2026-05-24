@@ -1,7 +1,7 @@
 {
   "name": "mordor",
   "productName": "Mordor",
-  "description": "Internal read-only Cassandra desktop workbench.",
+  "description": "Read-only Cassandra desktop workbench.",
   "version": "0.2.6",
   "author": "Furkan",
   "license": "MIT",

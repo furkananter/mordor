@@ -1,6 +1,6 @@
-# Cassandra Desk
+# Mordor
 
-Internal read-only Cassandra desktop workbench for macOS, Windows, and Linux.
+Read-only Cassandra desktop workbench for macOS, Windows, and Linux.
 
 ## Features
 
@@ -22,7 +22,7 @@ npm run dev
 
 ## Packaging
 
-Create an unpacked internal build:
+Create an unpacked build:
 
 ```sh
 npm run package
@@ -45,5 +45,5 @@ Targets:
 Profile metadata is stored in the Electron user data directory as `profiles.json`.
 Passwords are stored through OS keychain integration via `keytar` using:
 
-- service: `cassandra-desk`
+- service: `mordor`
 - account: `connection:<profileId>:password`
