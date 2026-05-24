@@ -1,0 +1,121 @@
+{
+  "name": "mordor",
+  "productName": "Mordor",
+  "description": "Internal read-only Cassandra desktop workbench.",
+  "version": "0.2.6",
+  "author": "Furkan",
+  "license": "MIT",
+  "main": "./dist/main/index.cjs",
+  "scripts": {
+    "clean": "node ./scripts/clean.mjs",
+    "postinstall": "electron-rebuild -w keytar -w node-pty",
+    "compile": "tsc -p . --noEmit",
+    "build": "npm run clean && npm run compile && vite build && node ./scripts/build-main.mjs",
+    "dev": "npm run clean && concurrently -k \"npm:dev:renderer\" \"npm:dev:main\" \"npm:dev:electron\"",
+    "dev:renderer": "vite",
+    "dev:main": "node ./scripts/build-main.mjs --watch",
+    "dev:electron": "node ./scripts/dev-electron.mjs",
+    "package": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "release": "npm run build && electron-builder",
+    "dist:mac": "npm run build && electron-builder --mac --arm64 --x64",
+    "dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
+    "dist:mac:x64": "npm run build && electron-builder --mac --x64",
+    "dist:win:arm64": "npm run build && electron-builder --win --arm64",
+    "dist:linux:arm64": "npm run build && electron-builder --linux --arm64",
+    "dist:linux:x64": "bash scripts/build-in-docker.sh linux --x64",
+    "dist:win:x64": "bash scripts/build-in-docker.sh win --x64",
+    "dist:all": "bash scripts/build-all.sh",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.2",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/state": "^6.6.0",
+    "@codemirror/view": "^6.42.1",
+    "@radix-ui/react-alert-dialog": "^1.1.15",
+    "@radix-ui/react-context-menu": "^2.2.16",
+    "@radix-ui/react-dropdown-menu": "^2.1.16",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-select": "^2.2.6",
+    "@tanstack/react-table": "^8.21.3",
+    "@tanstack/react-virtual": "^3.13.24",
+    "@uiw/react-codemirror": "^4.25.9",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "cassandra-driver": "4.8.0",
+    "electron-store": "10.1.0",
+    "ioredis": "^5.10.1",
+    "keytar": "7.9.0",
+    "lucide-react": "^1.14.0",
+    "node-pty": "^1.1.0",
+    "react": "19.2.5",
+    "react-day-picker": "^10.0.0",
+    "react-dom": "19.2.5",
+    "zustand": "^5.0.13"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "4.0.4",
+    "@tailwindcss/postcss": "^4.2.4",
+    "@testing-library/jest-dom": "6.9.1",
+    "@testing-library/react": "16.3.0",
+    "@types/node": "24.10.1",
+    "@types/react": "19.2.7",
+    "@types/react-dom": "19.2.3",
+    "@vitejs/plugin-react": "latest",
+    "autoprefixer": "^10.5.0",
+    "concurrently": "^9.1.4",
+    "electron": "42.0.0",
+    "electron-builder": "26.8.1",
+    "electronmon": "^2.0.4",
+    "esbuild": "0.28.0",
+    "jsdom": "27.2.0",
+    "postcss": "^8.5.14",
+    "tailwindcss": "^4.2.4",
+    "typescript": "6.0.3",
+    "vite": "8.0.10",
+    "vitest": "latest",
+    "wait-on": "^8.0.5"
+  },
+  "build": {
+    "appId": "com.mordor.db",
+    "productName": "Mordor",
+    "executableName": "Mordor",
+    "directories": {
+      "output": "release"
+    },
+    "asar": true,
+    "files": [
+      "dist/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "media",
+        "to": "media"
+      }
+    ],
+    "mac": {
+      "icon": "media/macos/AppIcon.icns",
+      "identity": "-",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "media/macos/AppIcon512.png",
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "icon": "media/macos/AppIcon512.png",
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    }
+  }
+}

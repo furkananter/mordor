@@ -1,0 +1,376 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #f5f3ee;
+  --color-panel: #ffffff;
+  --color-panel-soft: #faf8f3;
+  --color-line: #e6e2d9;
+  --color-line-soft: #efece5;
+  --color-text: #2a2724;
+  --color-muted: #8a847b;
+  --color-subtle: #b3aea4;
+  --color-accent: #c8633a;
+  --color-accent-soft: #f0d4c2;
+  --color-danger: #c4453a;
+  --color-warning: #b88a2a;
+  --color-success: #4f8a4a;
+  --radius-ui: 6px;
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", monospace;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+    --cm-type: #2a6f97;
+    --cm-fn: #8f4f9b;
+    --cm-string: #7a6014;
+    --cm-number: #a04a1f;
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --color-bg: #1a1816;
+    --color-panel: #211e1b;
+    --color-panel-soft: #28241f;
+    --color-line: #34302a;
+    --color-line-soft: #2b2823;
+    --color-text: #ece8e0;
+    --color-muted: #8f877c;
+    --color-subtle: #5e574e;
+    --color-accent: #d97a4a;
+    --color-accent-soft: #3a2a20;
+    --color-danger: #e16e5f;
+    --color-warning: #d4a04a;
+    --color-success: #7aa872;
+    --cm-type: #7eb3d4;
+    --cm-fn: #c89bd0;
+    --cm-string: #d4b974;
+    --cm-number: #e9a47a;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01", "ss03";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    margin: 0;
+    padding: 0;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 22%, transparent);
+  }
+
+  ::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: color-mix(in srgb, var(--color-muted) 32%, transparent);
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: color-mix(in srgb, var(--color-muted) 52%, transparent);
+  }
+}
+
+@layer utilities {
+  /* Replacements for framer-motion's fade/slide patterns. Easings match
+   * `--ease-out` so the motion feels identical after dropping the runtime lib. */
+  @keyframes fade-slide-up {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes fade-slide-right {
+    from {
+      opacity: 0;
+      transform: translateX(-6px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  .anim-fade-slide-up {
+    animation: fade-slide-up 140ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  }
+  .anim-fade-in {
+    animation: fade-in 160ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  }
+  .anim-fade-slide-right {
+    animation: fade-slide-right 160ms cubic-bezier(0.23, 1, 0.32, 1) both;
+  }
+
+  /* Fresh-row flash for live-mode preview rows. Plays once on attribute
+   * insert, then settles to transparent. Avoids the always-on
+   * `transition-colors duration-1000` we used to set on every TableRow,
+   * which registered a transition watcher per row even when there was
+   * nothing to fade. */
+  @keyframes row-flash {
+    0% {
+      background-color: color-mix(in srgb, var(--color-success) 15%, transparent);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+  [data-fresh="true"] {
+    animation: row-flash 4s ease-out forwards;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .anim-fade-slide-up,
+    .anim-fade-in,
+    .anim-fade-slide-right,
+    [data-fresh="true"] {
+      animation: none;
+    }
+  }
+
+  @keyframes shimmer {
+    0% {
+      background-position: 200% 0;
+    }
+    100% {
+      background-position: -200% 0;
+    }
+  }
+
+  .skeleton {
+    background-color: var(--color-line-soft);
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--color-panel) 70%, transparent) 50%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    background-repeat: no-repeat;
+    animation: shimmer 1.4s ease-in-out infinite;
+    border-radius: 4px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton {
+      animation: none;
+    }
+  }
+
+  .app-shell {
+    --sidebar-width: 280px;
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  }
+
+  .app-shell:not([data-resizing="true"]) {
+    transition: grid-template-columns 220ms var(--ease-drawer);
+  }
+
+  .app-shell[data-sidebar-collapsed="true"] {
+    grid-template-columns: 96px minmax(0, 1fr);
+  }
+
+  .app-shell[data-sidebar-collapsed="true"][data-fullscreen="true"] {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .sidebar-resize-handle {
+    position: absolute;
+    top: 0;
+    right: -3px;
+    width: 6px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 30;
+    background: transparent;
+    transition: background-color 120ms var(--ease-out);
+  }
+
+  .sidebar-resize-handle:hover,
+  .sidebar-resize-handle[data-active="true"] {
+    background: color-mix(in srgb, var(--color-accent) 50%, transparent);
+  }
+
+  .app-shell[data-sidebar-collapsed="true"] .sidebar-resize-handle {
+    display: none;
+  }
+
+  .surface-chrome {
+    box-shadow: none;
+  }
+
+  .sidebar-shell {
+    background: var(--color-panel-soft);
+  }
+
+  .sidebar-header {
+    position: relative;
+    height: 110px;
+    transition: height 220ms var(--ease-drawer);
+  }
+
+  .sidebar-shell[data-collapsed="true"] .sidebar-header {
+    height: 78px;
+  }
+
+  .app-shell[data-fullscreen="true"] .sidebar-header {
+    height: 78px;
+  }
+
+  .app-shell[data-fullscreen="true"]
+    .sidebar-shell[data-collapsed="true"]
+    .sidebar-header {
+    height: 56px;
+  }
+
+  .sidebar-expanded-header,
+  .sidebar-compact-header,
+  .sidebar-pane {
+    transition:
+      opacity 140ms var(--ease-out),
+      transform 220ms var(--ease-out);
+  }
+
+  .sidebar-expanded-header {
+    position: absolute;
+    inset: 36px 12px auto 12px;
+    opacity: 1;
+    transform: translateX(0);
+    transition:
+      inset 220ms var(--ease-drawer),
+      opacity 140ms var(--ease-out),
+      transform 220ms var(--ease-out);
+    transition-delay: 55ms;
+  }
+
+  .app-shell[data-fullscreen="true"] .sidebar-expanded-header {
+    inset: 12px 12px auto 12px;
+  }
+
+  .sidebar-compact-header {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 38px;
+    display: flex;
+    justify-content: center;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(6px);
+    transition:
+      top 220ms var(--ease-drawer),
+      opacity 140ms var(--ease-out),
+      transform 220ms var(--ease-out);
+  }
+
+  .app-shell[data-fullscreen="true"] .sidebar-compact-header {
+    top: 14px;
+  }
+
+  .sidebar-pane {
+    opacity: 1;
+    transform: translateX(0);
+  }
+
+  .sidebar-compact-pane {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(8px);
+  }
+
+  .sidebar-compact-footer {
+    display: none;
+  }
+
+  .sidebar-shell[data-collapsed="true"] .sidebar-expanded-header,
+  .sidebar-shell[data-collapsed="true"] .sidebar-expanded-pane {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-8px);
+    transition-delay: 0ms;
+  }
+
+  .sidebar-shell[data-collapsed="true"] .sidebar-expanded-footer {
+    display: none;
+  }
+
+  .sidebar-shell[data-collapsed="true"] .sidebar-compact-footer {
+    display: flex;
+  }
+
+  .sidebar-shell[data-collapsed="true"] .sidebar-compact-header,
+  .sidebar-shell[data-collapsed="true"] .sidebar-compact-pane {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0);
+    transition-delay: 75ms;
+  }
+
+  .drag-region {
+    -webkit-app-region: drag;
+  }
+
+  .no-drag {
+    -webkit-app-region: no-drag;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .app-shell,
+    .sidebar-header,
+    .sidebar-expanded-header,
+    .sidebar-compact-header,
+    .sidebar-pane {
+      transition-duration: 1ms;
+    }
+  }
+}
