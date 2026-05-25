@@ -92,13 +92,15 @@ describe("Cassandra Desk renderer", () => {
     expect((await screen.findAllByText("Local")).length).toBeGreaterThan(0);
     fireEvent.click(screen.getByRole("button", { name: "orders" }));
 
-    // The workspace routes are code-split via React.lazy now; give Vitest's
-    // dynamic import resolver a generous window before assertions.
-    expect(await screen.findByText(/app\.orders/, undefined, { timeout: 5000 })).toBeInTheDocument();
+    // Workspace routes are code-split via React.lazy. The 10 s
+    // `asyncUtilTimeout` configured in test/setup.ts gives Vitest's dynamic
+    // import resolver enough headroom on slow macOS CI runners; no per-call
+    // override needed.
+    expect(await screen.findByText(/app\.orders/)).toBeInTheDocument();
     expect(
-      await screen.findByRole("columnheader", { name: "id" }, { timeout: 5000 })
+      await screen.findByRole("columnheader", { name: "id" })
     ).toBeInTheDocument();
-    expect(await screen.findByText("12.5", undefined, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText("12.5")).toBeInTheDocument();
     expect(api.getTableSchema).toHaveBeenCalled();
     expect(api.getPreview).toHaveBeenCalled();
     expect(screen.getByLabelText("Schema inspector")).toBeInTheDocument();
@@ -125,14 +127,14 @@ describe("Cassandra Desk renderer", () => {
   it("runs a CQL query from the CQL tab", async () => {
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "orders" }, { timeout: 5000 }));
-    await screen.findByRole("columnheader", { name: "id" }, { timeout: 5000 });
+    fireEvent.click(await screen.findByRole("button", { name: "orders" }));
+    await screen.findByRole("columnheader", { name: "id" });
 
     fireEvent.click(screen.getByRole("tab", { name: "CQL" }));
     act(() => useQueryStore.getState().setQueryText("SELECT * FROM users"));
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
     await waitFor(() => expect(api.runSelectQuery).toHaveBeenCalledWith("p1", "SELECT * FROM users", "read"));
-    expect(await screen.findByText("SELECT * FROM users LIMIT 100", undefined, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText("SELECT * FROM users LIMIT 100")).toBeInTheDocument();
   });
 });

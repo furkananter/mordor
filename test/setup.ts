@@ -1,6 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
-import { cleanup } from "@testing-library/react";
+import { cleanup, configure } from "@testing-library/react";
+
+// Default `findBy*` / `waitFor` timeout is 1 s. The App.test.tsx flows wait
+// for lazy-loaded chunks (TableWorkspace + CqlEditor) to mount and an IPC
+// mock chain to resolve; locally that finishes in ~250 ms but macOS GitHub
+// runners take ~3-7 s for the same work. Bumping the global default to 10 s
+// covers the slow runner without forcing every assertion to repeat a
+// per-call `{ timeout: ... }` override.
+configure({ asyncUtilTimeout: 10_000 });
 
 // jsdom v27 ships a localStorage object whose Storage methods (setItem/getItem
 // /removeItem) live on the prototype but aren't picked up by Zustand's
