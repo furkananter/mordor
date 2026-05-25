@@ -162,6 +162,7 @@ export function App() {
         <WorkspaceRoutes
           showSettings={showSettings}
           onAddConnection={handleOpenAdd}
+          onEditConnection={handleEditProfile}
           onOpenTable={handleOpenTable}
         />
 

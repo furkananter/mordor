@@ -14,7 +14,10 @@ export function CqlPanel({
   placeholder,
   schema,
   onChange,
-  onRun
+  onRun,
+  title = "CQL Console",
+  hideQueryMode = false,
+  dialect = "cassandra"
 }: {
   queryText: string;
   queryResult: QueryResultPayload | undefined;
@@ -23,6 +26,17 @@ export function CqlPanel({
   schema?: TableSchemaPayload | undefined;
   onChange(value: string): void;
   onRun(): Promise<void>;
+  /** Header label — defaults to "CQL Console", override for SQL etc. */
+  title?: string;
+  /** Hide the read/write mode pill for engines that don't honor it (Postgres). */
+  hideQueryMode?: boolean;
+  /**
+   * Drives the CodeMirror SQL dialect + autocomplete tables. Cassandra is the
+   * default since this panel ships with CQL Console; Postgres callers pass
+   * "postgres" so RETURNING / jsonb / dollar-quoted bodies highlight
+   * correctly and the completion list isn't full of CQL-only tokens.
+   */
+  dialect?: "cassandra" | "postgres";
 }) {
   const editorHeight = useLayoutStore((state) => state.cqlEditorHeight);
   const setEditorHeight = useLayoutStore((state) => state.setCqlEditorHeight);
@@ -57,11 +71,11 @@ export function CqlPanel({
     <section className="flex min-h-0 flex-1 flex-col bg-panel">
       <div className="flex items-center justify-between gap-2.5 border-b border-line-soft px-4 py-2">
         <div className="grid gap-0.5">
-          <span className="text-[12px] font-medium text-text">CQL Console</span>
+          <span className="text-[12px] font-medium text-text">{title}</span>
           <span className="text-[11.5px] text-muted">Cmd/Ctrl + Enter to run</span>
         </div>
         <div className="flex items-center gap-2">
-          <QueryModeBadge />
+          {hideQueryMode ? null : <QueryModeBadge />}
           <Button variant="primary" onClick={() => void onRun()} disabled={loading}>
             <Play size={12} strokeWidth={1.7} />
             {loading ? "Running" : "Run"}
@@ -81,6 +95,7 @@ export function CqlPanel({
               onRun={() => void onRun()}
               placeholder={placeholder}
               ariaLabel="CQL editor"
+              dialect={dialect}
               {...(completions ? { completions } : {})}
             />
           </Suspense>

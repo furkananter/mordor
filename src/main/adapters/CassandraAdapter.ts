@@ -1,4 +1,4 @@
-import { CassandraService, KeyspaceNode } from "../../core/cassandra/CassandraService";
+import { CassandraService } from "../../core/cassandra/CassandraService";
 import {
   discoverLocalConnections,
   isSameEndpoint,
@@ -11,6 +11,7 @@ import {
 } from "../../core/config/profile";
 import {
   AdapterConnectResult,
+  AdapterSchema,
   DatabaseAdapter,
   DetectedConnection
 } from "../../core/db/types";
@@ -24,8 +25,8 @@ export class CassandraAdapter implements DatabaseAdapter {
     if (profile.type !== "cassandra") {
       throw new Error("CassandraAdapter received non-Cassandra profile.");
     }
-    const schema = await this.service.connect(profile);
-    return { schema };
+    const keyspaces = await this.service.connect(profile);
+    return { schema: { kind: "cassandra", keyspaces } };
   }
 
   disconnect(profileId: string): Promise<void> {
@@ -36,8 +37,8 @@ export class CassandraAdapter implements DatabaseAdapter {
     return this.service.isConnected(profileId);
   }
 
-  getSchema(profileId: string): KeyspaceNode[] {
-    return this.service.getSchema(profileId);
+  getSchema(profileId: string): AdapterSchema {
+    return { kind: "cassandra", keyspaces: this.service.getSchema(profileId) };
   }
 
   async detectLocal(

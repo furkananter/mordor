@@ -1,6 +1,14 @@
-import { randomUUID } from "node:crypto";
+// Use the global Web Crypto `randomUUID` instead of importing from `node:crypto`.
+// This file is shared between main (Node) and renderer (Chromium), and Vite
+// externalizes `node:*` modules — touching any export from `node:crypto` in the
+// renderer throws at module-evaluation time. The global form works in both
+// (Node 19+ and all modern Chromium) and keeps profile.ts safe to import from
+// renderer code like ConnectionNode and WorkspaceHome.
+function newProfileId(): string {
+  return globalThis.crypto.randomUUID();
+}
 
-export type ProfileType = "cassandra" | "redis";
+export type ProfileType = "cassandra" | "redis" | "postgres";
 
 interface BaseProfile {
   id: string;
@@ -28,7 +36,22 @@ export interface RedisProfile extends BaseProfile {
   tlsRejectUnauthorized?: boolean;
 }
 
-export type ConnectionProfile = CassandraProfile | RedisProfile;
+/**
+ * PostgreSQL connection. Each profile targets exactly one database — switching
+ * DBs requires a different profile (this mirrors how libpq itself works and
+ * keeps the schema sidebar deterministic). SSL is opt-in via `useTls` for the
+ * basic case; the `sslMode` field carries the libpq-style strictness when the
+ * user needs to override the default. `useTls=false` corresponds to `disable`.
+ */
+export interface PostgresProfile extends BaseProfile {
+  type: "postgres";
+  host: string;
+  port: number;
+  database: string;
+  sslMode?: "require" | "verify-ca" | "verify-full";
+}
+
+export type ConnectionProfile = CassandraProfile | RedisProfile | PostgresProfile;
 
 export interface CassandraConnectionDraft {
   type: "cassandra";
@@ -55,7 +78,24 @@ export interface RedisConnectionDraft {
   useTls: boolean;
 }
 
-export type ConnectionDraft = CassandraConnectionDraft | RedisConnectionDraft;
+export interface PostgresConnectionDraft {
+  type: "postgres";
+  name: string;
+  host: string;
+  port?: string;
+  database: string;
+  username?: string;
+  password?: string;
+  useTls: boolean;
+  sslMode?: PostgresProfile["sslMode"];
+  /** Pasted `postgres://...` URI. When present, overrides other fields on save. */
+  connectionString?: string;
+}
+
+export type ConnectionDraft =
+  | CassandraConnectionDraft
+  | RedisConnectionDraft
+  | PostgresConnectionDraft;
 
 export type ConnectionProfileWithPassword = ConnectionProfile & { password?: string };
 
@@ -67,6 +107,10 @@ export function isRedisProfile(profile: ConnectionProfile): profile is RedisProf
   return profile.type === "redis";
 }
 
+export function isPostgresProfile(profile: ConnectionProfile): profile is PostgresProfile {
+  return profile.type === "postgres";
+}
+
 export function validateStoredProfile(value: unknown): ConnectionProfile | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<ConnectionProfile> & Record<string, unknown>;
@@ -74,11 +118,16 @@ export function validateStoredProfile(value: unknown): ConnectionProfile | null 
   if (typeof candidate.name !== "string" || !candidate.name.trim()) return null;
   if (typeof candidate.useTls !== "boolean") return null;
 
-  // Back-compat: old profiles without `type` are Cassandra
-  const type: ProfileType = candidate.type === "redis" ? "redis" : "cassandra";
+  // Back-compat: old profiles without `type` are Cassandra. Newer profiles
+  // (`redis`, `postgres`) are dispatched explicitly so the back-compat path
+  // never accidentally swallows a future type as Cassandra.
+  const rawType = candidate.type;
+  const type: ProfileType =
+    rawType === "redis" || rawType === "postgres" ? rawType : "cassandra";
 
   if (type === "cassandra") return validateCassandraStored(candidate);
-  return validateRedisStored(candidate);
+  if (type === "redis") return validateRedisStored(candidate);
+  return validatePostgresStored(candidate);
 }
 
 function validateCassandraStored(candidate: Record<string, unknown>): CassandraProfile | null {
@@ -135,6 +184,30 @@ function validateRedisStored(candidate: Record<string, unknown>): RedisProfile |
   return profile;
 }
 
+function validatePostgresStored(candidate: Record<string, unknown>): PostgresProfile | null {
+  if (typeof candidate["host"] !== "string" || !candidate["host"].trim()) return null;
+  if (typeof candidate["port"] !== "number") return null;
+  if (typeof candidate["database"] !== "string" || !candidate["database"].trim()) return null;
+
+  const profile: PostgresProfile = {
+    id: String(candidate["id"]),
+    name: String(candidate["name"]).trim(),
+    type: "postgres",
+    host: String(candidate["host"]).trim(),
+    port: normalizePort(candidate["port"] as number),
+    database: String(candidate["database"]).trim(),
+    useTls: Boolean(candidate["useTls"])
+  };
+
+  const username = normalizeOptional(candidate["username"]);
+  if (username) profile.username = username;
+  const sslMode = candidate["sslMode"];
+  if (sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full") {
+    profile.sslMode = sslMode;
+  }
+  return profile;
+}
+
 export function createProfileFromDraft(draft: ConnectionDraft): ConnectionProfileWithPassword {
   const name = draft.name.trim();
   if (!name) throw new Error("Connection name is required.");
@@ -143,7 +216,7 @@ export function createProfileFromDraft(draft: ConnectionDraft): ConnectionProfil
     const host = draft.host.trim();
     if (!host) throw new Error("Host is required.");
     const profile: ConnectionProfileWithPassword = {
-      id: randomUUID(),
+      id: newProfileId(),
       name,
       type: "redis",
       host,
@@ -158,11 +231,49 @@ export function createProfileFromDraft(draft: ConnectionDraft): ConnectionProfil
     return profile;
   }
 
+  if (draft.type === "postgres") {
+    // Connection-string takes precedence: if the user pasted a URI we honor it
+    // and ignore the individual fields, because mixing the two silently almost
+    // always confuses people ("I changed the port but it kept using the URI").
+    const parsed = draft.connectionString?.trim()
+      ? parsePostgresConnectionString(draft.connectionString.trim())
+      : undefined;
+    const host = (parsed?.host ?? draft.host).trim();
+    if (!host) throw new Error("Host is required.");
+    const database = (parsed?.database ?? draft.database).trim();
+    if (!database) throw new Error("Database name is required.");
+
+    const profile: ConnectionProfileWithPassword = {
+      id: newProfileId(),
+      name,
+      type: "postgres",
+      host,
+      port: parsed?.port ?? parsePort(draft.port, 5432),
+      database,
+      useTls: parsed?.useTls ?? draft.useTls
+    };
+    // Username: if the user cleared the field, fall back to "postgres" instead
+    // of letting pg drop to `process.env.USER` (the macOS account name).
+    // That fallback is what makes "I cleared the username and now it tries to
+    // authenticate as `furkan`" surprising — Mordor is opinionated here. To
+    // override (e.g. peer auth on brew install), the user explicitly types
+    // their OS username; we never *invent* it on their behalf.
+    const username = normalizeOptional(parsed?.username ?? draft.username) ?? "postgres";
+    profile.username = username;
+    const password = normalizeOptional(parsed?.password ?? draft.password);
+    if (password) profile.password = password;
+    const sslMode = parsed?.sslMode ?? draft.sslMode;
+    if (sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full") {
+      profile.sslMode = sslMode;
+    }
+    return profile;
+  }
+
   const contactPoints = parseContactPoints(draft.contactPoints);
   if (contactPoints.length === 0) throw new Error("At least one contact point is required.");
 
   const profile: ConnectionProfileWithPassword = {
-    id: randomUUID(),
+    id: newProfileId(),
     name,
     type: "cassandra",
     contactPoints,
@@ -183,12 +294,56 @@ export function createProfileFromDraft(draft: ConnectionDraft): ConnectionProfil
   return profile;
 }
 
+interface ParsedPostgresUri {
+  host?: string;
+  port?: number;
+  database?: string;
+  username?: string;
+  password?: string;
+  useTls?: boolean;
+  sslMode?: PostgresProfile["sslMode"];
+}
+
+/**
+ * Best-effort `postgres://[user[:pass]@]host[:port]/database?sslmode=…` parser.
+ * Falls back gracefully when fields are missing — connection-string pasting is
+ * a convenience, not a validation gate, and the form re-validates downstream.
+ */
+function parsePostgresConnectionString(input: string): ParsedPostgresUri | undefined {
+  try {
+    // Normalize `postgresql://` to `postgres://` so URL() recognizes the scheme.
+    const normalized = input.replace(/^postgresql:\/\//i, "postgres://");
+    const url = new URL(normalized);
+    if (url.protocol !== "postgres:") return undefined;
+    const parsed: ParsedPostgresUri = {};
+    if (url.hostname) parsed.host = decodeURIComponent(url.hostname);
+    if (url.port) {
+      const port = Number.parseInt(url.port, 10);
+      if (Number.isInteger(port) && port > 0) parsed.port = port;
+    }
+    const pathDb = url.pathname.replace(/^\//, "");
+    if (pathDb) parsed.database = decodeURIComponent(pathDb);
+    if (url.username) parsed.username = decodeURIComponent(url.username);
+    if (url.password) parsed.password = decodeURIComponent(url.password);
+    const sslmode = url.searchParams.get("sslmode");
+    if (sslmode === "disable") parsed.useTls = false;
+    else if (sslmode === "require" || sslmode === "verify-ca" || sslmode === "verify-full") {
+      parsed.useTls = true;
+      parsed.sslMode = sslmode;
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
 export function secretKeyForProfile(profileId: string): string {
   return `connection:${profileId}:password`;
 }
 
 export function profileAddress(profile: ConnectionProfile): string {
   if (profile.type === "redis") return `${profile.host}:${profile.port}`;
+  if (profile.type === "postgres") return `${profile.host}:${profile.port}/${profile.database}`;
   return `${profile.contactPoints.join(", ")}:${profile.port}`;
 }
 

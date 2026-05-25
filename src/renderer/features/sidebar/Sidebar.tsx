@@ -208,7 +208,9 @@ function CompactProfileButton({
 }
 
 function getDefaultTable(profile: ProfileListItem): TableIdentity | undefined {
-  const keyspace = profile.schema[0];
+  // Redis has no "default table" concept — its workspace opens via DB index.
+  if (profile.schema.kind !== "cassandra") return undefined;
+  const keyspace = profile.schema.keyspaces[0];
   const table = keyspace?.tables[0];
   if (!keyspace || !table) return undefined;
   return {

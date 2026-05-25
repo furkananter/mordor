@@ -1,8 +1,9 @@
 import { FormEvent, useState } from "react";
-import { Database, FolderOpen, Server, X } from "lucide-react";
+import { Database, FolderOpen, HardDrive, Server, X } from "lucide-react";
 import {
   CassandraConnectionDraft,
   ConnectionDraft,
+  PostgresConnectionDraft,
   ProfileType,
   RedisConnectionDraft
 } from "../../../core/config/profile";
@@ -34,6 +35,29 @@ const redisDefault: RedisConnectionDraft = {
   useTls: false
 };
 
+const postgresDefault: PostgresConnectionDraft = {
+  type: "postgres",
+  name: "",
+  host: "127.0.0.1",
+  port: "5432",
+  database: "postgres",
+  username: "postgres",
+  password: "",
+  useTls: false,
+  connectionString: ""
+};
+
+function defaultForType(type: ProfileType): ConnectionDraft {
+  switch (type) {
+    case "cassandra":
+      return cassandraDefault;
+    case "redis":
+      return redisDefault;
+    case "postgres":
+      return postgresDefault;
+  }
+}
+
 function draftFromProfile(profile: ProfileListItem): ConnectionDraft {
   if (profile.type === "redis") {
     return {
@@ -46,6 +70,21 @@ function draftFromProfile(profile: ProfileListItem): ConnectionDraft {
       password: "",
       useTls: profile.useTls
     };
+  }
+  if (profile.type === "postgres") {
+    const draft: PostgresConnectionDraft = {
+      type: "postgres",
+      name: profile.name,
+      host: profile.host,
+      port: String(profile.port),
+      database: profile.database,
+      username: profile.username ?? "",
+      password: "",
+      useTls: profile.useTls,
+      connectionString: ""
+    };
+    if (profile.sslMode) draft.sslMode = profile.sslMode;
+    return draft;
   }
   return {
     type: "cassandra",
@@ -80,14 +119,20 @@ export function ConnectionForm({
 
   const switchType = (next: ProfileType) => {
     if (typeLocked || next === draft.type) return;
-    setDraft(next === "redis" ? redisDefault : cassandraDefault);
+    setDraft(defaultForType(next));
   };
 
   async function submit(event: FormEvent<HTMLFormElement>): Promise<void> {
     event.preventDefault();
     await onSubmit(draft);
-    if (!editing) setDraft(cassandraDefault);
+    if (!editing) setDraft(defaultForType(draft.type));
     onCancel?.();
+  }
+
+  function placeholderForType(type: ProfileType): string {
+    if (type === "redis") return "Cache - prod";
+    if (type === "postgres") return "App db - prod";
+    return "Production read";
   }
 
   return (
@@ -95,18 +140,27 @@ export function ConnectionForm({
       <div className="grid gap-3 px-5 pb-3 pt-2">
         <div className="inline-flex items-center gap-0 rounded-ui border border-line p-0.5 self-start">
           <TypeOption icon={<Database size={13} strokeWidth={1.7} />} label="Cassandra" selected={draft.type === "cassandra"} onClick={() => switchType("cassandra")} disabled={typeLocked} />
+          <TypeOption icon={<HardDrive size={13} strokeWidth={1.7} />} label="Postgres" selected={draft.type === "postgres"} onClick={() => switchType("postgres")} disabled={typeLocked} />
           <TypeOption icon={<Server size={13} strokeWidth={1.7} />} label="Redis" selected={draft.type === "redis"} onClick={() => switchType("redis")} disabled={typeLocked} />
         </div>
 
         <label className={labelClassName}>
           Name
-          <input className={inputClassName} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required placeholder={draft.type === "redis" ? "Cache - prod" : "Production read"} />
+          <input
+            className={inputClassName}
+            value={draft.name}
+            onChange={(event) => setDraft({ ...draft, name: event.target.value })}
+            required
+            placeholder={placeholderForType(draft.type)}
+          />
         </label>
 
         {draft.type === "cassandra" ? (
           <CassandraFields draft={draft} setDraft={setDraft} editing={Boolean(editing)} />
-        ) : (
+        ) : draft.type === "redis" ? (
           <RedisFields draft={draft} setDraft={setDraft} editing={Boolean(editing)} />
+        ) : (
+          <PostgresFields draft={draft} setDraft={setDraft} editing={Boolean(editing)} />
         )}
       </div>
 
@@ -226,6 +280,70 @@ function RedisFields({
         </label>
       </div>
       <UserPasswordTls draft={draft} editing={editing} onChange={(updates) => setDraft({ ...draft, ...updates } as ConnectionDraft)} />
+    </>
+  );
+}
+
+function PostgresFields({
+  draft,
+  setDraft,
+  editing
+}: {
+  draft: PostgresConnectionDraft;
+  setDraft(next: ConnectionDraft): void;
+  editing: boolean;
+}) {
+  const update = <K extends keyof PostgresConnectionDraft>(key: K, value: PostgresConnectionDraft[K]) =>
+    setDraft({ ...draft, [key]: value });
+
+  return (
+    <>
+      <label className={labelClassName}>
+        Connection string <span className="font-normal text-subtle">· optional, overrides fields below on save</span>
+        <input
+          className={inputClassName}
+          value={draft.connectionString ?? ""}
+          onChange={(event) => update("connectionString", event.target.value)}
+          placeholder="postgres://user:pass@host:5432/db?sslmode=require"
+        />
+      </label>
+      <div className="grid grid-cols-[1fr_88px] gap-2">
+        <label className={labelClassName}>
+          Host
+          <input className={inputClassName} value={draft.host} onChange={(event) => update("host", event.target.value)} required placeholder="127.0.0.1" />
+        </label>
+        <label className={labelClassName}>
+          Port
+          <input className={inputClassName} value={draft.port ?? ""} onChange={(event) => update("port", event.target.value)} placeholder="5432" />
+        </label>
+      </div>
+      <label className={labelClassName}>
+        Database
+        <input className={inputClassName} value={draft.database} onChange={(event) => update("database", event.target.value)} required placeholder="postgres" />
+      </label>
+      <UserPasswordTls draft={draft} editing={editing} onChange={(updates) => setDraft({ ...draft, ...updates } as ConnectionDraft)} />
+      <label className={labelClassName}>
+        SSL mode <span className="font-normal text-subtle">· strictness when TLS is on</span>
+        <select
+          className={inputClassName}
+          value={draft.sslMode ?? ""}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === "require" || value === "verify-ca" || value === "verify-full") {
+              update("sslMode", value);
+            } else {
+              const next: PostgresConnectionDraft = { ...draft };
+              delete next.sslMode;
+              setDraft(next);
+            }
+          }}
+        >
+          <option value="">Default (require when TLS on)</option>
+          <option value="require">require</option>
+          <option value="verify-ca">verify-ca</option>
+          <option value="verify-full">verify-full</option>
+        </select>
+      </label>
     </>
   );
 }

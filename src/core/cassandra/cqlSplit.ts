@@ -1,13 +1,17 @@
 /**
- * Splits a CQL script into individual statements.
+ * Splits a CQL/SQL script into individual statements.
  *
  * Handles:
  *   - `;` terminators outside string literals
  *   - Single-quoted strings (with `''` escape)
- *   - Dollar-quoted strings (`$$...$$`)
+ *   - Dollar-quoted strings — both bare `$$...$$` and tagged `$tag$...$tag$`
+ *     (Postgres syntax used by CREATE FUNCTION / CREATE PROCEDURE / DO blocks
+ *     to embed bodies that contain `;` and `'`). The tag is `[A-Za-z_][A-Za-z0-9_]*`
+ *     per the Postgres grammar; identical opening and closing tag is required.
  *   - Line comments (`--` and `//`)
  *   - Block comments (slash-star ... star-slash)
- *   - `BEGIN BATCH ... APPLY BATCH;` blocks kept as one statement
+ *   - `BEGIN BATCH ... APPLY BATCH;` blocks kept as one statement (Cassandra-only;
+ *     the keyword gate means real SQL scripts never trigger this branch)
  */
 export function splitCqlStatements(input: string): string[] {
   const statements: string[] = [];
@@ -40,12 +44,15 @@ export function splitCqlStatements(input: string): string[] {
       continue;
     }
 
-    if (ch === "$" && next === "$") {
-      const end = input.indexOf("$$", i + 2);
-      const stop = end === -1 ? input.length : end + 2;
-      buffer += input.slice(i, stop);
-      i = stop;
-      continue;
+    if (ch === "$") {
+      const opener = scanDollarTag(input, i);
+      if (opener) {
+        const closeAt = input.indexOf(opener.literal, opener.end);
+        const stop = closeAt === -1 ? input.length : closeAt + opener.literal.length;
+        buffer += input.slice(i, stop);
+        i = stop;
+        continue;
+      }
     }
 
     if (!inBatch && matchesKeyword(input, i, "BEGIN") && followedByBatch(input, i + 5)) {
@@ -90,6 +97,36 @@ function pushIfNotEmpty(statements: string[], buffer: string): void {
 function skipToEol(input: string, start: number): number {
   const newline = input.indexOf("\n", start);
   return newline === -1 ? input.length : newline + 1;
+}
+
+/**
+ * If `start` is the opening `$` of a Postgres dollar-quoted string, return the
+ * literal opener (e.g. `$$` or `$body$`) and the index right after it. Returns
+ * undefined otherwise — the caller treats `$` as a normal character (could be
+ * a column ref like `$1` in a placeholder, currency, etc.).
+ *
+ * Postgres tag grammar: an opener is `$` + optional identifier (letters,
+ * digits, underscore; cannot start with digit) + `$`. The closer is the same
+ * literal string. The body between can contain anything except that literal.
+ */
+function scanDollarTag(
+  input: string,
+  start: number,
+): { literal: string; end: number } | undefined {
+  // Bare $$ — fast path.
+  if (input[start + 1] === "$") {
+    return { literal: "$$", end: start + 2 };
+  }
+  // Tagged $tag$ — accumulate identifier chars until the next `$`.
+  let i = start + 1;
+  // Reject if first char isn't a valid identifier start. `$1`, `$2` (parameter
+  // placeholders) hit this branch — we don't treat them as dollar-quotes.
+  if (i >= input.length || !/[A-Za-z_]/.test(input[i]!)) return undefined;
+  while (i < input.length && /[A-Za-z0-9_]/.test(input[i]!)) {
+    i += 1;
+  }
+  if (input[i] !== "$") return undefined;
+  return { literal: input.slice(start, i + 1), end: i + 1 };
 }
 
 function scanSingleQuoted(input: string, start: number): number {
