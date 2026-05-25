@@ -1,6 +1,9 @@
 import { useState } from "react";
-import { ShieldAlert } from "lucide-react";
+import { ExternalLink, RotateCw, ShieldAlert } from "lucide-react";
+import { UpdateStatus } from "../../../core/ipc";
+import { Button } from "../../components/ui/Button";
 import { FontScale, QueryMode, ThemePreference } from "../../store/constants";
+import { useUpdaterStore } from "../../store/updater";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -84,6 +87,13 @@ export function SettingsPage({
               labelFor={(option) => option}
               onChange={onFontScaleChange}
             />
+          </Section>
+
+          <Section
+            title="Updates"
+            description="Mordor checks for new releases on launch. You can also check manually here."
+          >
+            <UpdatesPanel />
           </Section>
         </div>
 
@@ -189,4 +199,88 @@ function Section({
       <div className="mt-1">{children}</div>
     </div>
   );
+}
+
+function UpdatesPanel() {
+  const status = useUpdaterStore((s) => s.status);
+  const checkNow = useUpdaterStore((s) => s.checkNow);
+  const [checking, setChecking] = useState(false);
+
+  const isBusy = status.kind === "checking" || status.kind === "downloading" || checking;
+  const canCheck = status.kind !== "unsupported";
+
+  const handleCheck = async () => {
+    setChecking(true);
+    try {
+      await checkNow();
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  return (
+    <div className="grid gap-2">
+      <div className="flex items-center justify-between gap-3 rounded-ui border border-line-soft bg-panel-soft px-3 py-2">
+        <div className="grid min-w-0 gap-0.5">
+          <span className="text-[12.5px] text-text">{statusLine(status)}</span>
+          <span className="text-[11px] text-muted">{detailLine(status)}</span>
+        </div>
+        {canCheck ? (
+          <Button onClick={() => void handleCheck()} disabled={isBusy} tooltip="Check for updates now">
+            <RotateCw size={11} strokeWidth={1.7} className={isBusy ? "animate-spin" : undefined} />
+            <span>{isBusy ? "Checking…" : "Check now"}</span>
+          </Button>
+        ) : status.releasesUrl ? (
+          <Button
+            onClick={() => window.open(status.releasesUrl, "_blank", "noopener,noreferrer")}
+            tooltip="Open the GitHub releases page"
+          >
+            <ExternalLink size={11} strokeWidth={1.7} />
+            <span>Releases page</span>
+          </Button>
+        ) : null}
+      </div>
+      {status.kind === "error" && status.error ? (
+        <p className="px-1 text-[11px] text-danger">{status.error}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function statusLine(status: UpdateStatus): string {
+  switch (status.kind) {
+    case "idle":
+      return "Not checked yet";
+    case "checking":
+      return "Checking for updates…";
+    case "available":
+      return `Mordor ${status.version ?? ""} available — downloading…`;
+    case "downloading":
+      return `Downloading${status.progress ? ` · ${status.progress.percent}%` : "…"}`;
+    case "downloaded":
+      return `Mordor ${status.version ?? ""} downloaded — restart to install`;
+    case "not-available":
+      return "Mordor is up to date";
+    case "error":
+      return "Update check failed";
+    case "unsupported":
+      // mac ad-hoc — in-app update path is gated by Squirrel signature check.
+      return "In-app updates are not available on this build";
+  }
+}
+
+function detailLine(status: UpdateStatus): string {
+  if (status.kind === "unsupported") {
+    return "This build isn't signed with a Developer ID; download new releases from GitHub.";
+  }
+  if (!status.lastCheckedAt) return "Mordor will check automatically a few seconds after launch.";
+  return `Last checked: ${formatRelative(status.lastCheckedAt)}`;
+}
+
+function formatRelative(timestamp: number): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
 }

@@ -5,6 +5,10 @@
   "version": "0.2.6",
   "author": "Furkan",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/furkananter/mordor.git"
+  },
   "main": "./dist/main/index.cjs",
   "scripts": {
     "clean": "node ./scripts/clean.mjs",
@@ -46,6 +50,7 @@
     "@xterm/xterm": "^6.0.0",
     "cassandra-driver": "4.8.0",
     "electron-store": "10.1.0",
+    "electron-updater": "^6.8.3",
     "ioredis": "^5.10.1",
     "keytar": "7.9.0",
     "lucide-react": "^1.14.0",
@@ -96,6 +101,13 @@
       {
         "from": "media",
         "to": "media"
+      }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "furkananter",
+        "repo": "mordor"
       }
     ],
     "mac": {

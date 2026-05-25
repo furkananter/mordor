@@ -40,7 +40,11 @@ const api: CassandraDeskApi = {
   redisGet: vi.fn(),
   redisDelete: vi.fn(),
   redisSetString: vi.fn(),
-  redisCommand: vi.fn()
+  redisCommand: vi.fn(),
+  getUpdateStatus: vi.fn(() => Promise.resolve({ kind: "idle" as const })),
+  checkForUpdates: vi.fn(),
+  installUpdate: vi.fn(),
+  onUpdateStatus: vi.fn(() => () => undefined)
 };
 
 const profile = {

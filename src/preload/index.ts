@@ -106,6 +106,21 @@ const api: CassandraDeskApi = {
     ipcRenderer.on("terminal:exit", listener);
     return () => ipcRenderer.off("terminal:exit", listener);
   },
+  getUpdateStatus: () => ipcRenderer.invoke(ipcChannels.getUpdateStatus),
+  checkForUpdates: () => ipcRenderer.invoke(ipcChannels.checkForUpdates),
+  installUpdate: () => ipcRenderer.invoke(ipcChannels.installUpdate),
+  onUpdateStatus: (callback) => {
+    // Main pushes `updater:status` on every lifecycle transition AND once per
+    // attachWindow() so a freshly-mounted UI gets the current state without
+    // a separate fetch. The renderer-side hook still calls getUpdateStatus
+    // for the very first synchronous render before the listener attaches.
+    const listener = (_event: unknown, status: Parameters<typeof callback>[0]) =>
+      callback(status);
+    ipcRenderer.on("updater:status", listener);
+    return () => {
+      ipcRenderer.off("updater:status", listener);
+    };
+  },
 };
 
 contextBridge.exposeInMainWorld("cassandraDesk", api);

@@ -109,6 +109,46 @@ export interface SchemaScriptResult {
   error?: string;
 }
 
+/**
+ * Auto-updater lifecycle states pushed from the main process to the renderer.
+ *
+ *   - idle          → no check has run yet (boot before scheduled check, dev mode)
+ *   - checking      → talking to the release server
+ *   - available     → newer version exists, download starting/in flight
+ *   - downloading   → progress reported with bytes + percent
+ *   - downloaded    → bits on disk, waiting for the user to confirm install
+ *   - not-available → server reachable, current version is latest
+ *   - error         → check or download failed; `error` carries the message
+ *   - unsupported   → mac without a Developer ID (Squirrel rejects ad-hoc
+ *                     builds); the renderer offers a manual download link
+ *                     to `releasesUrl` instead of an in-app install
+ */
+export type UpdateStatusKind =
+  | "idle"
+  | "checking"
+  | "available"
+  | "downloading"
+  | "downloaded"
+  | "not-available"
+  | "error"
+  | "unsupported";
+
+export interface UpdateProgress {
+  percent: number;
+  bytesPerSecond: number;
+  transferred: number;
+  total: number;
+}
+
+export interface UpdateStatus {
+  kind: UpdateStatusKind;
+  version?: string;
+  progress?: UpdateProgress;
+  error?: string;
+  lastCheckedAt?: number;
+  releasesUrl?: string;
+}
+
 export interface CassandraDeskApi {
   listProfiles(): Promise<ProfileListItem[]>;
   createProfile(input: CreateProfileInput): Promise<ProfileListItem[]>;
@@ -150,6 +190,18 @@ export interface CassandraDeskApi {
   terminalKill(id: string): void;
   onTerminalData(callback: (id: string, data: string) => void): () => void;
   onTerminalExit(callback: (id: string, info: { exitCode: number; signal?: number }) => void): () => void;
+  /** Snapshot of the most recent update status. Safe to call any time. */
+  getUpdateStatus(): Promise<UpdateStatus>;
+  /** Manually trigger a check. No-op when the platform is `unsupported` or in dev. */
+  checkForUpdates(): Promise<void>;
+  /** Quit + relaunch into the downloaded update. Caller should confirm first. */
+  installUpdate(): Promise<void>;
+  /**
+   * Subscribe to status pushes. Returns an unsubscribe. The current snapshot
+   * is broadcast on subscription so callers don't have to chain
+   * `getUpdateStatus()` themselves to seed initial state.
+   */
+  onUpdateStatus(callback: (status: UpdateStatus) => void): () => void;
 }
 
 export const ipcChannels = {
@@ -185,4 +237,7 @@ export const ipcChannels = {
   terminalWrite: "terminal:write",
   terminalResize: "terminal:resize",
   terminalKill: "terminal:kill",
+  getUpdateStatus: "updater:get-status",
+  checkForUpdates: "updater:check",
+  installUpdate: "updater:install",
 } as const;
