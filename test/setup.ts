@@ -2,12 +2,15 @@ import "@testing-library/jest-dom/vitest";
 import { afterEach } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-// jsdom v27 ships Storage methods on the prototype but Zustand's persist
-// middleware grabs `localStorage` once and calls `storage.setItem(...)` via
-// direct member access — which throws "storage.setItem is not a function"
-// the moment any persisted store mutates. Install an own-property shim so
-// direct access works and unblocks the persist path (otherwise App.test.tsx
-// times out on every test that clicks a table or opens a tab).
+// jsdom v27 ships a localStorage object whose Storage methods (setItem/getItem
+// /removeItem) live on the prototype but aren't picked up by Zustand's
+// `persist` middleware when it grabs `localStorage` off the window. Zustand
+// snapshots the storage reference at store-creation time and calls
+// `storage.setItem(...)` directly — which throws "storage.setItem is not a
+// function" the moment any persisted store mutates (`useLayoutStore` ⇒
+// every Tab change, table click, etc.). Installing an own-property shim makes
+// the methods visible to direct member access and unblocks the persist path.
+// (Without this, `App.test.tsx` times out on every test that clicks a table.)
 if (typeof globalThis.localStorage === "undefined" ||
     typeof globalThis.localStorage.setItem !== "function") {
   const store = new Map<string, string>();
@@ -36,6 +39,7 @@ if (typeof globalThis.localStorage === "undefined" ||
     writable: true,
     configurable: true,
   });
+  // Mirror onto window when the test runs in jsdom — Zustand reads from there.
   if (typeof (globalThis as { window?: { localStorage?: Storage } }).window === "object") {
     Object.defineProperty((globalThis as { window: { localStorage?: Storage } }).window, "localStorage", {
       value: shim,
@@ -47,7 +51,8 @@ if (typeof globalThis.localStorage === "undefined" ||
 
 afterEach(() => {
   cleanup();
-  // Reset persisted state between tests so one test's tab/layout choice
-  // doesn't leak into the next.
+  // Reset persisted layout/store state between tests so one test's tab choice
+  // doesn't bleed into the next ("renders saved connections" expects the Data
+  // tab on first paint; a leftover "cql" from another test breaks it).
   globalThis.localStorage?.clear();
 });

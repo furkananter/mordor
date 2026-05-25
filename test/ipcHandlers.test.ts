@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { ipcChannels } from "../src/core/ipc";
 import { CassandraService } from "../src/core/cassandra/CassandraService";
+import { PostgresService } from "../src/core/postgres/PostgresService";
 import { AdapterRegistry } from "../src/main/adapters/AdapterRegistry";
 import { CassandraAdapter } from "../src/main/adapters/CassandraAdapter";
+import { PostgresAdapter } from "../src/main/adapters/PostgresAdapter";
 import { RedisAdapter } from "../src/main/adapters/RedisAdapter";
 import { createIpcHandlerMap } from "../src/main/handlers";
 import { ProfileStore } from "../src/main/ProfileStore";
@@ -17,20 +19,29 @@ const profile = {
   useTls: false
 };
 
-function buildContext(overrides: { store?: Partial<ProfileStore>; cassandra?: Partial<CassandraService> } = {}) {
+function buildContext(overrides: {
+  store?: Partial<ProfileStore>;
+  cassandra?: Partial<CassandraService>;
+  postgres?: Partial<PostgresService>;
+} = {}) {
   const store = (overrides.store ?? {}) as ProfileStore;
   const cassandra = (overrides.cassandra ?? {}) as CassandraService;
+  const postgres = (overrides.postgres ?? {}) as PostgresService;
   const adapters = new AdapterRegistry();
   adapters.register(new CassandraAdapter(cassandra));
+  adapters.register(new PostgresAdapter(postgres));
   adapters.register(new RedisAdapter());
-  return { store, cassandra, redis: new RedisAdapter(), adapters };
+  return { store, cassandra, postgres, redis: new RedisAdapter(), adapters };
 }
 
 describe("IPC handler map", () => {
   it("lists profiles with connection state and schema", async () => {
+    const keyspaces = [{ name: "app", tables: [{ name: "orders" }] }];
     const cassandra = {
       isConnected: vi.fn().mockReturnValue(true),
-      getSchema: vi.fn().mockReturnValue([{ name: "app", tables: [{ name: "orders" }] }])
+      // CassandraService.getSchema still returns KeyspaceNode[] — the adapter
+      // is the layer that wraps it into the tagged-union AdapterSchema.
+      getSchema: vi.fn().mockReturnValue(keyspaces)
     } as unknown as CassandraService;
     const store = {
       list: vi.fn().mockResolvedValue([profile])
@@ -39,7 +50,7 @@ describe("IPC handler map", () => {
 
     const handlers = createIpcHandlerMap(ctx);
     await expect(handlers[ipcChannels.listProfiles]()).resolves.toEqual([
-      { ...profile, connected: true, schema: [{ name: "app", tables: [{ name: "orders" }] }] }
+      { ...profile, connected: true, schema: { kind: "cassandra", keyspaces } }
     ]);
   });
 
@@ -62,7 +73,12 @@ describe("IPC handler map", () => {
         limit: 100
       })
     } as unknown as CassandraService;
-    const ctx = buildContext({ cassandra });
+    // Schema handlers now dispatch on profile.type, so the store needs to
+    // surface the profile for the query path to know which service to call.
+    const store = {
+      get: vi.fn().mockResolvedValue(profile)
+    } as unknown as ProfileStore;
+    const ctx = buildContext({ cassandra, store });
 
     const handlers = createIpcHandlerMap(ctx);
     await expect(handlers[ipcChannels.runSelectQuery]("p1", "SELECT * FROM users")).resolves.toMatchObject({

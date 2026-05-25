@@ -4,10 +4,10 @@ import { secretKeyForProfile } from "../src/core/config/profile";
 
 describe("keychain naming", () => {
   it("uses the Mordor service and per-profile password account", () => {
-    // Renaming the service breaks existing installs — they'd lose access to
-    // passwords saved under the previous name. Any future rename needs a
-    // migration that reads the old service and writes to the new one before
-    // the old entry is removed.
+    // Important: changing the service name is a breaking change — existing
+    // installs would lose access to passwords stored under the previous name.
+    // If we ever rename again, we need to add a migration that reads from the
+    // old name and rewrites under the new one before deleting.
     expect(keychainServiceName).toBe("mordor");
     expect(secretKeyForProfile("p1")).toBe("connection:p1:password");
   });

@@ -1,5 +1,10 @@
-import { ConnectionDraft, ConnectionProfile } from "./config/profile";
-import { KeyspaceNode } from "./cassandra/CassandraService";
+import {
+  CassandraProfile,
+  ConnectionDraft,
+  PostgresProfile,
+  RedisProfile
+} from "./config/profile";
+import { AdapterSchema } from "./db/types";
 import {
   MigrationApplyResult,
   MigrationListPayload,
@@ -13,17 +18,34 @@ import { LocalDiscoveryResult } from "./cassandra/localDiscovery";
 
 export type CreateProfileInput = ConnectionDraft;
 
-export type ProfileListItem = ConnectionProfile & {
+// Per-DB list items pair the profile fields with the matching schema variant.
+// Built explicitly (instead of `ConnectionProfile & { schema: AdapterSchema }`)
+// so `Extract<ProfileListItem, { type: "cassandra" }>` carries the cassandra
+// schema variant too — narrowing on `profile.type` narrows `profile.schema`
+// in one step instead of forcing a second `kind` check at every callsite.
+export type CassandraProfileListItem = CassandraProfile & {
   connected: boolean;
-  schema: KeyspaceNode[];
+  schema: Extract<AdapterSchema, { kind: "cassandra" }>;
 };
 
-export type CassandraProfileListItem = Extract<ProfileListItem, { type: "cassandra" }>;
-export type RedisProfileListItem = Extract<ProfileListItem, { type: "redis" }>;
+export type RedisProfileListItem = RedisProfile & {
+  connected: boolean;
+  schema: Extract<AdapterSchema, { kind: "redis" }>;
+};
+
+export type PostgresProfileListItem = PostgresProfile & {
+  connected: boolean;
+  schema: Extract<AdapterSchema, { kind: "postgres" }>;
+};
+
+export type ProfileListItem =
+  | CassandraProfileListItem
+  | RedisProfileListItem
+  | PostgresProfileListItem;
 
 export interface ConnectResult {
   profileId: string;
-  schema: KeyspaceNode[];
+  schema: AdapterSchema;
 }
 
 export interface RedisKeyEntry {
@@ -75,6 +97,14 @@ export interface SchemaScriptResult {
   statementsExecuted: number;
   durationMs: number;
   schemaAgreementOk: boolean;
+  /**
+   * Postgres-only: the script was wrapped in a transaction and rolled back
+   * because at least one statement failed. Cassandra leaves this undefined
+   * (its DDL is non-transactional — earlier successes persist regardless).
+   * The renderer uses this to label per-statement ✓ marks as "attempted
+   * (rolled back)" so users don't think the early statements landed.
+   */
+  rolledBack?: boolean;
   statements: SchemaScriptStatementResult[];
   error?: string;
 }
@@ -131,7 +161,7 @@ export interface CassandraDeskApi {
   }>;
   connect(profileId: string): Promise<ConnectResult>;
   disconnect(profileId: string): Promise<ProfileListItem[]>;
-  refreshSchema(profileId: string): Promise<KeyspaceNode[]>;
+  refreshSchema(profileId: string): Promise<AdapterSchema>;
   getTableSchema(table: TableIdentity): Promise<TableSchemaPayload>;
   getPreview(table: TableIdentity, pageState?: string): Promise<PreviewRowsPayload>;
   runSelectQuery(profileId: string, cql: string, mode?: "read" | "write" | "all"): Promise<QueryResultPayload>;

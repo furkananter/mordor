@@ -1,14 +1,20 @@
 # Mordor
 
-Read-only Cassandra desktop workbench for macOS, Windows, and Linux.
+Multi-database desktop workbench for macOS, Windows, and Linux.
+
+## Supported databases
+
+- **Apache Cassandra** — keyspaces, tables, CQL console, schema scripts, migrations.
+- **Redis** — DB browser, key inspector, ad-hoc command palette.
+- **PostgreSQL** — schemas (tables + views), table preview, SQL console, table DDL.
 
 ## Features
 
-- Detect local Cassandra nodes on common localhost ports.
+- Detect local Cassandra / Postgres / Redis instances on their default ports.
 - Store connection metadata locally while keeping passwords in the OS keychain.
-- Browse connections, keyspaces, and tables from a compact sidebar.
-- Select a table to auto-load schema and a read-only `LIMIT 100` preview.
-- Keep v1 read-only: no arbitrary CQL editor, inserts, updates, deletes, or schema mutations.
+- Browse connections and their schemas/keyspaces/databases from a compact sidebar.
+- Select a table to auto-load schema and a `LIMIT 100` preview.
+- Per-engine workspace: CQL for Cassandra, SQL for Postgres, command palette for Redis.
 
 ## Development
 

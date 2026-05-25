@@ -5,11 +5,14 @@ import { EditorView, keymap } from "@codemirror/view";
 import CodeMirror, { ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import { useMemo, useRef } from "react";
 import { CqlEditorSchema, buildAutocomplete } from "./autocomplete";
-import { cassandraDialect } from "./dialect";
+import { cassandraDialect, postgresDialect } from "./dialect";
 import { highlightStyle } from "./highlight";
 import { editorTheme } from "./theme";
 
 export type { CqlEditorSchema } from "./autocomplete";
+
+/** Which SQL dialect drives syntax highlighting and the bundled autocomplete. */
+export type CqlEditorDialect = "cassandra" | "postgres";
 
 export function CqlEditor({
   value,
@@ -17,7 +20,8 @@ export function CqlEditor({
   onRun,
   placeholder,
   completions,
-  ariaLabel
+  ariaLabel,
+  dialect = "cassandra"
 }: {
   value: string;
   onChange(value: string): void;
@@ -25,15 +29,22 @@ export function CqlEditor({
   placeholder?: string;
   completions?: CqlEditorSchema;
   ariaLabel?: string;
+  dialect?: CqlEditorDialect;
 }) {
   const ref = useRef<ReactCodeMirrorRef>(null);
 
   const extensions = useMemo(
     () => [
-      sql({ dialect: cassandraDialect, upperCaseKeywords: true }),
+      // PostgresWorkspace passes dialect="postgres" so SQL keywords (RETURNING,
+      // ON CONFLICT, jsonb operators, `$body$ ... $body$`) are recognized and
+      // the Cassandra-specific autocomplete doesn't pollute pg suggestions.
+      sql({
+        dialect: dialect === "postgres" ? postgresDialect : cassandraDialect,
+        upperCaseKeywords: true
+      }),
       syntaxHighlighting(highlightStyle),
       editorTheme,
-      buildAutocomplete(completions),
+      buildAutocomplete(completions, dialect),
       Prec.highest(
         keymap.of([
           {
@@ -47,7 +58,7 @@ export function CqlEditor({
       ),
       EditorView.lineWrapping
     ],
-    [completions, onRun]
+    [completions, onRun, dialect]
   );
 
   return (

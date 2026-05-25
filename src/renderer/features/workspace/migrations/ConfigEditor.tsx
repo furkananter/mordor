@@ -19,7 +19,9 @@ export function ConfigEditor({
   const [folder, setFolder] = useState(profile.migrationsFolder ?? "");
   const [keyspace, setKeyspace] = useState(profile.migrationsKeyspace ?? "");
   const [saving, setSaving] = useState(false);
-  const keyspaceOptions = profile.connected ? profile.schema.map((entry) => entry.name) : [];
+  const keyspaceOptions = profile.connected
+    ? profile.schema.keyspaces.map((entry) => entry.name)
+    : [];
 
   const pickFolder = async () => {
     const picked = await window.cassandraDesk.pickMigrationsFolder();

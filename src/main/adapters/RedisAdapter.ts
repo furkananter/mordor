@@ -18,6 +18,7 @@ import {
 } from "../../core/config/profile";
 import {
   AdapterConnectResult,
+  AdapterSchema,
   DatabaseAdapter,
   DetectedConnection
 } from "../../core/db/types";
@@ -52,7 +53,7 @@ export class RedisAdapter implements DatabaseAdapter {
     }
 
     const existing = this.sessions.get(profile.id);
-    if (existing) return { schema: [] };
+    if (existing) return { schema: { kind: "redis" } };
 
     const Redis = await loadRedis();
     const client = new Redis({
@@ -79,7 +80,7 @@ export class RedisAdapter implements DatabaseAdapter {
     }
 
     this.sessions.set(profile.id, { client, currentDb: profile.db });
-    return { schema: [] };
+    return { schema: { kind: "redis" } };
   }
 
   async disconnect(profileId: string): Promise<void> {
@@ -99,8 +100,8 @@ export class RedisAdapter implements DatabaseAdapter {
     return session.client.status === "ready" || session.client.status === "connect";
   }
 
-  getSchema(): never[] {
-    return [];
+  getSchema(): AdapterSchema {
+    return { kind: "redis" };
   }
 
   async detectLocal(existing: ConnectionProfile[]): Promise<DetectedConnection[]> {

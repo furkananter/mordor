@@ -13,12 +13,16 @@ export function TableRow({
   identity,
   keyspace,
   active,
-  onOpenTable
+  onOpenTable,
+  label
 }: {
   identity: TableIdentity;
   keyspace: string;
   active: boolean;
   onOpenTable(table: TableIdentity): Promise<void>;
+  /** Optional display override (e.g. "orders (mview)") — identity.table stays
+   *  the real object name so queries / copy actions are unaffected. */
+  label?: string;
 }) {
   const qualified = `${keyspace}.${identity.table}`;
   const copy = (value: string) => () => void navigator.clipboard.writeText(value);
@@ -34,7 +38,7 @@ export function TableRow({
             onClick={() => onOpenTable(identity)}
           >
             <Table2 size={11} strokeWidth={1.7} className="shrink-0" />
-            <span className="truncate">{identity.table}</span>
+            <span className="truncate">{label ?? identity.table}</span>
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent>
