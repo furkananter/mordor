@@ -1,0 +1,76 @@
+name: Release
+
+# Fires on annotated/lightweight tag pushes whose name starts with `v`
+# (matches `v0.2.6`, `v1.0.0-rc.1`, etc). Bumping with `npm version <bump>`
+# already creates this tag — pushing the tag is the publish trigger.
+#
+# Also exposes `workflow_dispatch` so a maintainer can re-run a botched
+# release without retagging. The job reads the version straight from
+# package.json, so a re-run picks up whatever's checked into the ref.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write  # required for electron-builder to create/edit the GitHub Release
+
+jobs:
+  build:
+    name: Build & publish (${{ matrix.os }})
+    strategy:
+      # Don't bail out the other platforms when one fails. A release is more
+      # useful with two artifacts than zero, and the failing platform's logs
+      # are easier to read after the others have finished.
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macOS (arm64 + x64)
+            build_args: --mac --arm64 --x64
+          - os: ubuntu-latest
+            label: Linux (x64 AppImage)
+            build_args: --linux --x64
+          - os: windows-latest
+            label: Windows (x64 NSIS)
+            build_args: --win --x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      # Linux needs libsecret headers so keytar's native rebuild succeeds.
+      # macOS and Windows already ship the Keychain / Credential Vault APIs.
+      - name: Install libsecret (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Run our own pre-publish guards so a broken build never gets to the
+      # publish step. Cheap: 1-2 minutes on Node 22.
+      - name: Type-check
+        run: npm run compile
+
+      - name: Run tests
+        run: npm test
+
+      # The actual release. `electron-builder --publish always` uploads the
+      # artifacts to a draft GitHub Release matching the current version (it
+      # creates the release on the first matrix job, the others append to it).
+      # No PAT needed — GITHUB_TOKEN is repo-scoped and has `contents: write`
+      # via the job-level `permissions` block above.
+      - name: Build & publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder ${{ matrix.build_args }} --publish always

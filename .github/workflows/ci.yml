@@ -1,0 +1,44 @@
+name: CI
+
+# Run on every push to main and on every PR — main is the safety net so a bad
+# merge gets a red commit before it ships, PRs are the gate that catches it
+# before merge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel a stale run for the same ref when a new push lands. Avoids paying for
+# obsolete builds and surfaces the latest result faster.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Type-check + Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      # `npm ci` runs `postinstall: electron-rebuild -w keytar -w node-pty`.
+      # On Linux the native build chain (Python, libsecret-dev, build-essential)
+      # is preinstalled on ubuntu-latest, so the rebuild succeeds without
+      # extra apt setup. If it ever starts failing here, the fix is usually
+      # adding `libsecret-1-dev` via `apt-get install` before `npm ci`.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run compile
+
+      - name: Run tests
+        run: npm test
