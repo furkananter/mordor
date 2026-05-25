@@ -14,11 +14,14 @@ if (process.platform === "linux") {
 import { ProfileStore } from "./ProfileStore";
 import { SecretStore } from "./SecretStore";
 import { TerminalService } from "./TerminalService";
+import { UpdaterService } from "./UpdaterService";
 import { createMainContext } from "./handlers";
 import { registerIpcHandlers } from "./ipcHandlers";
 import { registerTerminalIpc } from "./terminalIpc";
+import { registerUpdaterIpc } from "./updaterIpc";
 
 const terminals = new TerminalService();
+const updater = new UpdaterService();
 let mainContext: ReturnType<typeof createMainContext> | undefined;
 
 function resolveIcon(): Electron.NativeImage | undefined {
@@ -33,7 +36,7 @@ function resolveIcon(): Electron.NativeImage | undefined {
   return undefined;
 }
 
-async function createWindow(): Promise<void> {
+async function createWindow(): Promise<BrowserWindow> {
   const icon = resolveIcon();
   const window = new BrowserWindow({
     width: 1240,
@@ -71,13 +74,14 @@ async function createWindow(): Promise<void> {
   if (rendererUrl) {
     try {
       await window.loadURL(rendererUrl);
-      return;
+      return window;
     } catch {
       // Fallback to packaged bundle if Vite server is not reachable.
     }
   }
 
   await window.loadFile(join(__dirname, "../renderer/index.html"));
+  return window;
 }
 
 /**
@@ -116,11 +120,17 @@ app.whenReady().then(async () => {
   mainContext = createMainContext(store);
   registerIpcHandlers(mainContext);
   registerTerminalIpc(terminals);
-  await createWindow();
+  registerUpdaterIpc(updater);
+  const window = await createWindow();
+  updater.attachWindow(window);
+  // Defers the actual electron-updater import + first GitHub round-trip by
+  // 10 s so it doesn't compete with the first paint and the profile fetch.
+  updater.scheduleStartupCheck(app.isPackaged);
 
-  app.on("activate", () => {
+  app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      void createWindow();
+      const next = await createWindow();
+      updater.attachWindow(next);
     }
   });
 });

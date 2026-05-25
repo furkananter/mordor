@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { CreateProfileInput, ProfileListItem } from "../core/ipc";
 import { ConnectionFormDialog } from "./features/connections/ConnectionFormDialog";
 import { Sidebar } from "./features/sidebar/Sidebar";
+import { UpdateBanner } from "./features/updates/UpdateBanner";
 import { TerminalDrawer } from "./features/workspace/TerminalDrawer";
 import { WorkspaceHeader } from "./features/workspace/WorkspaceHeader";
 import { WorkspaceRoutes } from "./features/workspace/WorkspaceRoutes";
@@ -15,6 +16,7 @@ import { usePreferencesStore } from "./store/preferences";
 import { useRedisStore } from "./store/redis";
 import { useSchemaStore } from "./store/schema";
 import { useStatusStore } from "./store/status";
+import { useUpdaterStore } from "./store/updater";
 
 export function App() {
   // Stores
@@ -51,6 +53,8 @@ export function App() {
   const showForm = useStatusStore((state) => state.showForm);
   const setShowForm = useStatusStore((state) => state.setShowForm);
 
+  const initUpdater = useUpdaterStore((state) => state.init);
+
   // App-level state
   const [showSettings, setShowSettings] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProfileListItem | undefined>(undefined);
@@ -73,6 +77,13 @@ export function App() {
       else window.clearTimeout(handle);
     };
   }, [init]);
+  useEffect(() => {
+    // Same idle deferral pattern: the updater state machine pulls its initial
+    // snapshot over IPC and subscribes to pushes. Pushed status changes drive
+    // the UpdateBanner — nothing on the critical-path render depends on it,
+    // so it can wait until after first paint.
+    void initUpdater();
+  }, [initUpdater]);
   useThemeSync(themePreference, fontScale);
   useAppShortcuts({ onToggleTerminal: toggleTerminal });
   const fullscreen = useFullscreen();
@@ -152,6 +163,10 @@ export function App() {
 
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden" aria-label="Workspace">
         <WorkspaceHeader showSettings={showSettings} />
+
+        {/* Update banner sits just under the title bar — only renders when there's
+            an actionable update state (available / downloaded / mac-unsupported). */}
+        <UpdateBanner />
 
         {error ? (
           <div className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-[12px] text-danger" role="alert">
