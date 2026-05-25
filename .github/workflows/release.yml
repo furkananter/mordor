@@ -65,12 +65,23 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # Produce `dist/main/index.cjs` (esbuild), `dist/preload/index.cjs`, and
+      # the Vite renderer bundle. electron-builder expects all of these in
+      # `dist/**` per the `build.files` glob in package.json — without this
+      # step it packages an empty app.asar and fails the sanity check with
+      # "dist/main/index.cjs ... was not found in this archive".
+      # `npm run build` also re-runs `tsc --noEmit`; that's redundant with the
+      # Type-check step above but cheap (~5 s) and keeps the script the same
+      # one developers run locally.
+      - name: Build app bundle
+        run: npm run build
+
       # The actual release. `electron-builder --publish always` uploads the
       # artifacts to a draft GitHub Release matching the current version (it
       # creates the release on the first matrix job, the others append to it).
       # No PAT needed — GITHUB_TOKEN is repo-scoped and has `contents: write`
       # via the job-level `permissions` block above.
-      - name: Build & publish
+      - name: Package & publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder ${{ matrix.build_args }} --publish always
