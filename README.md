@@ -60,26 +60,42 @@ Mordor uses [`electron-updater`](https://www.electron.build/auto-update) against
 GitHub Releases. Each released version is delivered automatically to running
 clients on platforms where the build is signed.
 
-### Cutting a release
+### Cutting a release (recommended: CI)
 
-1. Bump `version` in `package.json` (semver).
-2. Build the platform artifacts you want to publish — for example all targets:
+The `.github/workflows/release.yml` workflow does the multi-platform build and
+publish on every tag push. Day-to-day flow:
 
-   ```sh
-   npm run dist:all
-   ```
+```sh
+# bump the version, create the matching tag, commit it
+npm version patch -m "chore: release v%s"
+# or `npm version minor` / `npm version major`
 
-3. Publish to GitHub Releases (creates a draft if the release doesn't exist):
+# push the commit AND the tag
+git push --follow-tags
+```
 
-   ```sh
-   GH_TOKEN=<your-github-pat> npx electron-builder --publish always
-   ```
+That fires off three matrix jobs (`macos-latest`, `ubuntu-latest`,
+`windows-latest`) — each runs `electron-builder --publish always`, which
+creates a draft GitHub Release matching the new version and uploads its
+artifacts to it. The job uses the built-in `GITHUB_TOKEN`, no PAT needed.
 
-   The PAT needs `public_repo` (or `repo` for private repos) scope. Alternatively
-   run this from a CI workflow with the built-in `GITHUB_TOKEN`.
+When all platforms finish, open the draft release on GitHub, edit notes,
+hit **Publish release**. Connected Mordor clients pick it up on their next
+check (the manifest read is what auto-updater watches; draft releases don't
+count, only published ones).
 
-4. Open the GitHub release, edit notes, hit **Publish release**. Connected
-   Mordor clients pick it up on their next check.
+### Cutting a release (manual fallback)
+
+When the workflow is unavailable or you want to test locally first:
+
+```sh
+GH_TOKEN=<your-github-pat> npx electron-builder --publish always
+```
+
+The PAT needs `public_repo` (or `repo` for private repos) scope. This builds
+only the host's native platform — multi-arch + multi-OS still wants the
+workflow. The existing `npm run dist:*` scripts produce unpublished
+artifacts in `release/` if you just want to inspect them.
 
 ### Update lifecycle in the app
 
