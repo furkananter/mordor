@@ -14,6 +14,9 @@ import { useStatusStore } from "../../store/status";
 const ClusterWorkspace = lazy(() =>
   import("./ClusterWorkspace").then((m) => ({ default: m.ClusterWorkspace }))
 );
+const PostgresWorkspace = lazy(() =>
+  import("./postgres/PostgresWorkspace").then((m) => ({ default: m.PostgresWorkspace }))
+);
 const RedisWorkspace = lazy(() =>
   import("./redis/RedisWorkspace").then((m) => ({ default: m.RedisWorkspace }))
 );
@@ -35,10 +38,12 @@ const WorkspaceHome = lazy(() =>
 export function WorkspaceRoutes({
   showSettings,
   onAddConnection,
+  onEditConnection,
   onOpenTable
 }: {
   showSettings: boolean;
   onAddConnection: () => void;
+  onEditConnection: (profile: ProfileListItem) => void;
   onOpenTable: (table: TableIdentity) => Promise<void>;
 }) {
   const profiles = useConnectionStore((state) => state.profiles);
@@ -80,11 +85,22 @@ export function WorkspaceRoutes({
   } else if (selectedTable) {
     content = <TableWorkspace />;
   } else {
-    const cassandraCluster = findCassandraProfile(profiles, selectedProfileId);
-    if (cassandraCluster) {
+    const selectedCluster = findProfile(profiles, selectedProfileId);
+    if (selectedCluster?.type === "cassandra") {
       content = (
         <ClusterWorkspace
-          profile={cassandraCluster}
+          profile={selectedCluster}
+          queryText={queryText}
+          queryResult={queryResult}
+          queryLoading={queryState === "loading"}
+          onQueryChange={setQueryText}
+          onRun={runQuery}
+        />
+      );
+    } else if (selectedCluster?.type === "postgres") {
+      content = (
+        <PostgresWorkspace
+          profile={selectedCluster}
           queryText={queryText}
           queryResult={queryResult}
           queryLoading={queryState === "loading"}
@@ -99,6 +115,7 @@ export function WorkspaceRoutes({
           busy={busy}
           onDetectLocal={detectLocal}
           onAddConnection={onAddConnection}
+          onEditConnection={onEditConnection}
           onConnect={connect}
           onDisconnect={disconnect}
           onOpenTable={onOpenTable}
@@ -118,10 +135,10 @@ function RouteFallback() {
   return <div className="flex min-h-0 flex-1 items-center justify-center" />;
 }
 
-function findCassandraProfile(
+function findProfile(
   profiles: ProfileListItem[],
   profileId: string | undefined
 ): ProfileListItem | undefined {
   if (!profileId) return undefined;
-  return profiles.find((profile) => profile.id === profileId && profile.type === "cassandra");
+  return profiles.find((profile) => profile.id === profileId);
 }

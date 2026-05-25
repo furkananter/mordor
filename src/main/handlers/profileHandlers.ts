@@ -1,4 +1,5 @@
 import { ConnectionProfile } from "../../core/config/profile";
+import { emptySchemaFor } from "../../core/db/types";
 import {
   CreateProfileInput,
   ipcChannels,
@@ -17,10 +18,14 @@ export function createProfileHandlers(
       const adapter = adapters.has(profile.type)
         ? adapters.forProfile(profile)
         : undefined;
+      // When no adapter is registered (defensive — should not happen in
+      // practice because every profile.type is paired with a registered
+      // adapter at startup) we fall back to the empty schema variant
+      // matching the profile.type so the renderer can still narrow on it.
       return {
         ...profile,
         connected: adapter?.isConnected(profile.id) ?? false,
-        schema: adapter?.getSchema(profile.id) ?? [],
+        schema: adapter?.getSchema(profile.id) ?? emptySchemaFor(profile.type),
       } as ProfileListItem;
     });
   };

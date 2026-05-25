@@ -1,4 +1,5 @@
 import { ChevronDown } from "lucide-react";
+import type { KeyspaceNode as KeyspaceNodeData } from "../../../core/cassandra/CassandraService";
 import { ProfileListItem } from "../../../core/ipc";
 import { TableIdentity } from "../../../core/shared/messages";
 import { TableRow } from "./TableRow";
@@ -10,7 +11,7 @@ export function KeyspaceNode({
   onOpenTable
 }: {
   profile: ProfileListItem;
-  keyspace: ProfileListItem["schema"][number];
+  keyspace: KeyspaceNodeData;
   selectedTable: TableIdentity | undefined;
   onOpenTable(table: TableIdentity): Promise<void>;
 }) {

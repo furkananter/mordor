@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { ArrowRight, Clock, Database, Plug, PlugZap, Plus, Radar, Table2 } from "lucide-react";
+import { ArrowRight, Clock, Database, Pencil, Plug, PlugZap, Plus, Radar, Table2 } from "lucide-react";
+import { profileAddress } from "../../../core/config/profile";
 import { ProfileListItem } from "../../../core/ipc";
 import { TableIdentity } from "../../../core/shared/messages";
 import { Button } from "../../components/ui/Button";
@@ -10,6 +11,7 @@ export function WorkspaceHome({
   busy,
   onDetectLocal,
   onAddConnection,
+  onEditConnection,
   onConnect,
   onDisconnect,
   onOpenTable
@@ -18,6 +20,7 @@ export function WorkspaceHome({
   busy: string | undefined;
   onDetectLocal(): Promise<void>;
   onAddConnection(): void;
+  onEditConnection(profile: ProfileListItem): void;
   onConnect(profileId: string): Promise<void>;
   onDisconnect(profileId: string): Promise<void>;
   onOpenTable(table: TableIdentity): Promise<void>;
@@ -29,9 +32,20 @@ export function WorkspaceHome({
     return recents.filter((entry) => profileIds.has(entry.table.profileId));
   }, [recents, profiles]);
 
-  const totalKeyspaces = profiles.reduce((sum, profile) => sum + profile.schema.length, 0);
+  // Stats are Cassandra-only for now: Redis has no keyspace/table model and
+  // each new database (postgres → schemas, mongo → collections) will need its
+  // own counters. Once the second non-Cassandra DB lands, this should be
+  // generalized into a per-profile "schema summary" helper.
+  const totalKeyspaces = profiles.reduce(
+    (sum, profile) =>
+      profile.schema.kind === "cassandra" ? sum + profile.schema.keyspaces.length : sum,
+    0
+  );
   const totalTables = profiles.reduce(
-    (sum, profile) => sum + profile.schema.reduce((s, ks) => s + ks.tables.length, 0),
+    (sum, profile) =>
+      profile.schema.kind === "cassandra"
+        ? sum + profile.schema.keyspaces.reduce((s, ks) => s + ks.tables.length, 0)
+        : sum,
     0
   );
   const onlineCount = profiles.filter((profile) => profile.connected).length;
@@ -77,6 +91,7 @@ export function WorkspaceHome({
                   profile={profile}
                   onConnect={onConnect}
                   onDisconnect={onDisconnect}
+                  onEdit={onEditConnection}
                   onOpenTable={onOpenTable}
                 />
               ))}
@@ -135,20 +150,26 @@ function ConnectionCard({
   profile,
   onConnect,
   onDisconnect,
+  onEdit,
   onOpenTable
 }: {
   profile: ProfileListItem;
   onConnect(profileId: string): Promise<void>;
   onDisconnect(profileId: string): Promise<void>;
+  onEdit(profile: ProfileListItem): void;
   onOpenTable(table: TableIdentity): Promise<void>;
 }) {
   const displayName = profile.name.replace(/\s*\([^)]*\)\s*$/, "");
   const address =
     profile.type === "redis"
       ? `${profile.host}:${profile.port} · db ${profile.db}`
-      : `${profile.contactPoints.join(", ")}:${profile.port}`;
-  const keyspaceCount = profile.schema.length;
-  const tableCount = profile.schema.reduce((sum, ks) => sum + ks.tables.length, 0);
+      : profileAddress(profile);
+  const keyspaceCount =
+    profile.schema.kind === "cassandra" ? profile.schema.keyspaces.length : 0;
+  const tableCount =
+    profile.schema.kind === "cassandra"
+      ? profile.schema.keyspaces.reduce((sum, ks) => sum + ks.tables.length, 0)
+      : 0;
   const defaultTable = getDefaultTable(profile);
 
   return (
@@ -161,17 +182,23 @@ function ConnectionCard({
           </div>
           <span className="truncate font-mono text-[11px] text-subtle">{address}</span>
         </div>
-        {profile.connected ? (
-          <Button onClick={() => void onDisconnect(profile.id)} tooltip="Disconnect">
-            <Plug size={11} strokeWidth={1.7} />
-            <span>Disconnect</span>
+        <div className="flex items-center gap-1">
+          <Button onClick={() => onEdit(profile)} tooltip="Edit connection">
+            <Pencil size={11} strokeWidth={1.7} />
+            <span>Edit</span>
           </Button>
-        ) : (
-          <Button variant="primary" onClick={() => void onConnect(profile.id)} tooltip="Connect">
-            <PlugZap size={11} strokeWidth={1.7} />
-            <span>Connect</span>
-          </Button>
-        )}
+          {profile.connected ? (
+            <Button onClick={() => void onDisconnect(profile.id)} tooltip="Disconnect">
+              <Plug size={11} strokeWidth={1.7} />
+              <span>Disconnect</span>
+            </Button>
+          ) : (
+            <Button variant="primary" onClick={() => void onConnect(profile.id)} tooltip="Connect">
+              <PlugZap size={11} strokeWidth={1.7} />
+              <span>Connect</span>
+            </Button>
+          )}
+        </div>
       </div>
 
       {profile.connected ? (
@@ -235,7 +262,8 @@ function recentKey(table: TableIdentity): string {
 }
 
 function getDefaultTable(profile: ProfileListItem): TableIdentity | undefined {
-  const keyspace = profile.schema[0];
+  if (profile.schema.kind !== "cassandra") return undefined;
+  const keyspace = profile.schema.keyspaces[0];
   const table = keyspace?.tables[0];
   if (!keyspace || !table) return undefined;
   return {

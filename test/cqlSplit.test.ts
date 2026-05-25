@@ -50,4 +50,38 @@ describe("splitCqlStatements", () => {
     expect(splitCqlStatements("")).toEqual([]);
     expect(splitCqlStatements("   \n\t")).toEqual([]);
   });
+
+  it("keeps bare $$ dollar-quoted bodies as one statement", () => {
+    const result = splitCqlStatements("SELECT $$hi; there$$; SELECT 2;");
+    expect(result).toEqual(["SELECT $$hi; there$$", "SELECT 2"]);
+  });
+
+  it("keeps tagged $body$ dollar-quoted bodies as one statement (Postgres CREATE FUNCTION)", () => {
+    const script = `CREATE FUNCTION f() RETURNS void AS $body$
+BEGIN
+  x := 1;
+  y := 2;
+END;
+$body$ LANGUAGE plpgsql;
+SELECT 1;`;
+    const result = splitCqlStatements(script);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toContain("CREATE FUNCTION");
+    expect(result[0]).toContain("END;");
+    expect(result[0]).toContain("$body$ LANGUAGE plpgsql");
+    expect(result[1]).toBe("SELECT 1");
+  });
+
+  it("treats $1, $2 placeholders as plain characters (not dollar-quote openers)", () => {
+    const result = splitCqlStatements("SELECT * FROM t WHERE id = $1; SELECT 2;");
+    expect(result).toEqual(["SELECT * FROM t WHERE id = $1", "SELECT 2"]);
+  });
+
+  it("handles nested-tag scenarios where the inner literal differs from the outer", () => {
+    // $a$ ... $a$ contains text that includes $b$ — the $b$ must NOT close $a$.
+    const script = "DO $a$ raise notice '$b$inner not a close$b$'; $a$;";
+    const result = splitCqlStatements(script);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toContain("$b$inner not a close$b$");
+  });
 });

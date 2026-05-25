@@ -52,7 +52,7 @@ const profile = {
   localDataCenter: "datacenter1",
   useTls: false,
   connected: true,
-  schema: [{ name: "app", tables: [{ name: "orders" }] }]
+  schema: { kind: "cassandra" as const, keyspaces: [{ name: "app", tables: [{ name: "orders" }] }] }
 };
 
 beforeEach(() => {

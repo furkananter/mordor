@@ -11,6 +11,7 @@ import {
   Settings,
   Trash2
 } from "lucide-react";
+import { profileAddress } from "../../../core/config/profile";
 import { ProfileListItem } from "../../../core/ipc";
 import { TableIdentity } from "../../../core/shared/messages";
 import {
@@ -40,6 +41,7 @@ import {
   DropdownMenuTrigger
 } from "../../components/ui/DropdownMenu";
 import { KeyspaceNode } from "./KeyspaceNode";
+import { PostgresSchemaList } from "./PostgresSchemaList";
 import { RedisDbList } from "./RedisDbList";
 import { useConnectionStore } from "../../store/connection";
 import { RedisSelection } from "../../store/redis";
@@ -82,10 +84,7 @@ export function ConnectionNode({
   const [expanded, setExpanded] = useState(profile.connected);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const displayName = profile.name.replace(/\s*\([^)]*\)\s*$/, "");
-  const address =
-    profile.type === "redis"
-      ? `${profile.host}:${profile.port}`
-      : `${profile.contactPoints.join(", ")}:${profile.port}`;
+  const address = profileAddress(profile);
 
   // Hoist the menu/context-menu actions to a memo. With many profiles in the
   // sidebar, each render of ConnectionNode would otherwise build a fresh array
@@ -153,7 +152,7 @@ export function ConnectionNode({
         <ContextMenuTrigger asChild>
           <div
             className={`group flex items-center gap-1 rounded-ui px-1.5 py-1 hover:bg-line-soft/60 data-[state=open]:bg-line-soft ${
-              profile.type === "cassandra" && selectedProfileId === profile.id ? "bg-accent-soft/50" : ""
+              (profile.type === "cassandra" || profile.type === "postgres") && selectedProfileId === profile.id ? "bg-accent-soft/50" : ""
             }`}
           >
             <button
@@ -161,7 +160,12 @@ export function ConnectionNode({
               className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
               onClick={() => {
                 setExpanded((value) => !value);
-                if (profile.connected && profile.type === "cassandra") onSelectProfile(profile.id);
+                // Both Cassandra and Postgres open a cluster-level workspace
+                // (CQL/SQL console) when selected. Redis routes to its DB list
+                // via a different handler, so it stays out of this branch.
+                if (profile.connected && (profile.type === "cassandra" || profile.type === "postgres")) {
+                  onSelectProfile(profile.id);
+                }
               }}
             >
               {profile.connected ? (
@@ -254,8 +258,8 @@ export function ConnectionNode({
               selected={selectedRedis}
               onSelect={onOpenRedisDb}
             />
-          ) : (
-            profile.schema.map((keyspace) => (
+          ) : profile.schema.kind === "cassandra" ? (
+            profile.schema.keyspaces.map((keyspace) => (
               <KeyspaceNode
                 key={keyspace.name}
                 profile={profile}
@@ -264,7 +268,17 @@ export function ConnectionNode({
                 onOpenTable={onOpenTable}
               />
             ))
-          )}
+          ) : profile.schema.kind === "postgres" ? (
+            profile.schema.schemas.map((schema) => (
+              <PostgresSchemaList
+                key={schema.name}
+                profile={profile}
+                schema={schema}
+                selectedTable={selectedTable}
+                onOpenTable={onOpenTable}
+              />
+            ))
+          ) : null}
         </ul>
       ) : null}
     </li>
