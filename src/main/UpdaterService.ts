@@ -1,4 +1,4 @@
-import type { BrowserWindow } from "electron";
+import { app, type BrowserWindow } from "electron";
 import type { AppUpdater, UpdateInfo } from "electron-updater";
 import type { UpdateStatus } from "../core/ipc";
 
@@ -15,19 +15,28 @@ async function loadUpdater(): Promise<AppUpdater> {
 }
 
 const RELEASES_URL = "https://github.com/furkananter/mordor/releases/latest";
+const GITHUB_LATEST_API =
+  "https://api.github.com/repos/furkananter/mordor/releases/latest";
 
 /**
- * Wraps electron-updater so the rest of the app stays unaware of its quirks:
+ * Wraps update-check plumbing so the rest of the app stays unaware of platform
+ * quirks:
  *
- *   - mac without a Developer ID can NOT auto-update (Squirrel requires a
- *     signed+notarized bundle; `identity: "-"` ad-hoc builds get rejected by
- *     Gatekeeper on the update path). The service detects this and reports
- *     `unsupported` so the UI offers a manual-download fallback instead of
- *     pretending and failing silently when the user clicks Install.
+ *   - **Linux/Windows:** electron-updater drives the full lifecycle — check,
+ *     download in the background, then "Restart to install" applies the
+ *     update via Squirrel.
  *
- *   - dev mode (`!app.isPackaged`) never runs the real updater — the dev
- *     bundle isn't a release, the GitHub provider would 404. Status starts
- *     and stays `idle` so the renderer can hide the banner entirely.
+ *   - **macOS:** the ad-hoc-signed (`identity: "-"`) build can't pass
+ *     Squirrel.mac's signature check, so we don't run electron-updater here
+ *     at all. Instead we hit the GitHub Releases API directly to learn
+ *     whether a newer version exists, then surface a versioned banner with
+ *     a manual-download CTA. Without a real Developer ID there is no other
+ *     option; pretending an in-app install will work and then failing at
+ *     restart-time would be worse than this honest fallback.
+ *
+ *   - **dev mode** (`!app.isPackaged`): no release to update against, the
+ *     GitHub provider would 404. Status starts and stays `idle` so the
+ *     renderer hides the banner entirely.
  *
  *   - All status changes are pushed to ALL open BrowserWindow instances via
  *     IPC. Renderer keeps the latest snapshot in a Zustand store; new
@@ -65,17 +74,6 @@ export class UpdaterService {
       this.setStatus({ kind: "idle" });
       return;
     }
-    if (process.platform === "darwin") {
-      // Ad-hoc signed builds (identity "-") fail Squirrel.mac's signature
-      // check during the update apply step. Without a real Developer ID we
-      // can't ship working mac auto-update. Surface unsupported so the UI
-      // tells the user where to grab the next build manually.
-      this.setStatus({
-        kind: "unsupported",
-        releasesUrl: RELEASES_URL,
-      });
-      return;
-    }
     setTimeout(() => {
       void this.checkForUpdates();
     }, 10_000);
@@ -91,10 +89,8 @@ export class UpdaterService {
       // Already in flight — don't kick off a second one.
       return;
     }
-    if (this.status.kind === "unsupported") {
-      // Mac ad-hoc / dev — refuse silently. The Settings UI hides the
-      // "Check now" button in this state, but the IPC channel is still
-      // reachable so we guard defensively.
+    if (process.platform === "darwin") {
+      await this.checkForUpdatesMac();
       return;
     }
     try {
@@ -103,6 +99,53 @@ export class UpdaterService {
       this.setStatus({ kind: "checking", lastCheckedAt: Date.now() });
       // Returns immediately; events drive the rest of the lifecycle.
       await autoUpdater.checkForUpdates();
+    } catch (caught) {
+      this.setStatus({
+        kind: "error",
+        error: caught instanceof Error ? caught.message : String(caught),
+        lastCheckedAt: Date.now(),
+      });
+    }
+  }
+
+  /**
+   * macOS path: hit the GitHub Releases API ourselves and compare versions.
+   * Doesn't try to invoke electron-updater because Squirrel.mac would reject
+   * the ad-hoc-signed apply step. When a newer release exists we set
+   * `kind: "available"` with `releasesUrl` so the renderer can render a
+   * manual-download CTA. When the current build is already latest, set
+   * `kind: "not-available"` so the banner hides itself.
+   */
+  private async checkForUpdatesMac(): Promise<void> {
+    this.setStatus({ kind: "checking", lastCheckedAt: Date.now() });
+    try {
+      const res = await fetch(GITHUB_LATEST_API, {
+        headers: { Accept: "application/vnd.github+json" },
+      });
+      if (!res.ok) {
+        throw new Error(`GitHub API responded ${res.status}`);
+      }
+      const data = (await res.json()) as { tag_name?: string };
+      const latest = (data.tag_name ?? "").replace(/^v/, "").trim();
+      const current = app.getVersion();
+      if (!latest) {
+        this.setStatus({ kind: "not-available", lastCheckedAt: Date.now() });
+        return;
+      }
+      if (isNewerSemver(latest, current)) {
+        this.setStatus({
+          kind: "available",
+          version: latest,
+          releasesUrl: RELEASES_URL,
+          lastCheckedAt: Date.now(),
+        });
+      } else {
+        this.setStatus({
+          kind: "not-available",
+          version: latest,
+          lastCheckedAt: Date.now(),
+        });
+      }
     } catch (caught) {
       this.setStatus({
         kind: "error",
@@ -206,4 +249,32 @@ export class UpdaterService {
     if (window.isDestroyed()) return;
     window.webContents.send("updater:status", this.status);
   }
+}
+
+/**
+ * Returns true when `candidate` is strictly newer than `current`. Handles the
+ * basic semver triple (`major.minor.patch`); pre-release identifiers are
+ * compared lexically as a tiebreaker. Stays inline because pulling the
+ * `semver` package in for one comparison would balloon the main bundle.
+ */
+export function isNewerSemver(candidate: string, current: string): boolean {
+  const parse = (v: string): [number, number, number, string] => {
+    const [core, pre = ""] = v.split("-", 2);
+    const [maj = "0", min = "0", patch = "0"] = (core ?? "").split(".");
+    return [
+      Number.parseInt(maj, 10) || 0,
+      Number.parseInt(min, 10) || 0,
+      Number.parseInt(patch, 10) || 0,
+      pre,
+    ];
+  };
+  const [aMaj, aMin, aPatch, aPre] = parse(candidate);
+  const [bMaj, bMin, bPatch, bPre] = parse(current);
+  if (aMaj !== bMaj) return aMaj > bMaj;
+  if (aMin !== bMin) return aMin > bMin;
+  if (aPatch !== bPatch) return aPatch > bPatch;
+  // No pre-release on a build means the release is final; final > pre-release.
+  if (aPre === "" && bPre !== "") return true;
+  if (aPre !== "" && bPre === "") return false;
+  return aPre > bPre;
 }

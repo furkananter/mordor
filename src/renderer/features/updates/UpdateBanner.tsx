@@ -5,12 +5,20 @@ import { useUpdaterStore } from "../../store/updater";
 
 /**
  * One-line banner at the top of the workspace. Only renders for states the
- * user can act on (available / downloading / downloaded / unsupported with
- * a fallback URL); hidden in idle / checking / not-available so the chrome
- * doesn't jump every time a background check runs.
+ * user can act on (available / downloading / downloaded); hidden in idle /
+ * checking / not-available so the chrome doesn't jump every time a
+ * background check runs.
  *
- * On `unsupported` (mac ad-hoc) we show a manual-download link instead of
- * an install button — the in-app updater literally can't apply the bits.
+ * The CTA branches on whether the status carries a `releasesUrl`:
+ *
+ *   - `releasesUrl` present (mac path): manual-download external link
+ *     because Squirrel.mac can't apply ad-hoc-signed updates.
+ *
+ *   - no `releasesUrl` + kind=downloaded (Linux/Windows): "Restart to
+ *     install" via electron-updater.
+ *
+ *   - no `releasesUrl` + kind=available/downloading: just show progress
+ *     because the updater is already pulling the bits.
  */
 export function UpdateBanner() {
   const status = useUpdaterStore((s) => s.status);
@@ -19,15 +27,21 @@ export function UpdateBanner() {
   const installNow = useUpdaterStore((s) => s.installNow);
   const [installing, setInstalling] = useState(false);
 
-  // Hide entirely when there's nothing for the user to do, OR when the user
-  // already dismissed this exact version.
   const shouldShow =
     status.kind === "available" ||
     status.kind === "downloading" ||
-    status.kind === "downloaded" ||
-    (status.kind === "unsupported" && Boolean(status.releasesUrl));
+    status.kind === "downloaded";
   if (!shouldShow) return null;
-  if (status.version && dismissedVersion === status.version) return null;
+  // Dismissal is version-keyed (sentinel for un-versioned states). Hide if
+  // the user already dismissed THIS exact version; the next release clears
+  // the sentinel in the store.
+  if (
+    dismissedVersion &&
+    (dismissedVersion === status.version || dismissedVersion === "__dismissed__")
+  ) {
+    return null;
+  }
+  const manualDownload = Boolean(status.releasesUrl);
 
   const handleInstall = async () => {
     setInstalling(true);
@@ -47,16 +61,10 @@ export function UpdateBanner() {
     >
       <div className="flex min-w-0 items-center gap-2">
         <Download size={12} strokeWidth={1.7} className="shrink-0 text-accent" />
-        <span className="truncate">{renderMessage(status)}</span>
+        <span className="truncate">{renderMessage(status, manualDownload)}</span>
       </div>
       <div className="flex shrink-0 items-center gap-1">
-        {status.kind === "downloaded" ? (
-          <Button variant="primary" onClick={() => void handleInstall()} disabled={installing}>
-            <RotateCw size={11} strokeWidth={1.7} />
-            <span>{installing ? "Restarting…" : "Restart to install"}</span>
-          </Button>
-        ) : null}
-        {status.kind === "unsupported" && status.releasesUrl ? (
+        {manualDownload && status.releasesUrl ? (
           <Button
             variant="primary"
             onClick={() => {
@@ -68,6 +76,11 @@ export function UpdateBanner() {
             <ExternalLink size={11} strokeWidth={1.7} />
             <span>Download</span>
           </Button>
+        ) : status.kind === "downloaded" ? (
+          <Button variant="primary" onClick={() => void handleInstall()} disabled={installing}>
+            <RotateCw size={11} strokeWidth={1.7} />
+            <span>{installing ? "Restarting…" : "Restart to install"}</span>
+          </Button>
         ) : null}
         <Button onClick={dismiss} tooltip="Dismiss until next release">
           <X size={11} strokeWidth={1.7} />
@@ -77,19 +90,24 @@ export function UpdateBanner() {
   );
 }
 
-function renderMessage(status: ReturnType<typeof useUpdaterStore.getState>["status"]): string {
+function renderMessage(
+  status: ReturnType<typeof useUpdaterStore.getState>["status"],
+  manualDownload: boolean
+): string {
   const v = status.version ?? "";
   switch (status.kind) {
     case "available":
-      return `Mordor ${v} is available — downloading…`;
+      // On mac (manualDownload) we won't auto-pull the bits, so the message
+      // should say "available" without implying a background download.
+      return manualDownload
+        ? `Mordor ${v} is available — download from GitHub Releases.`
+        : `Mordor ${v} is available — downloading…`;
     case "downloading":
       // Percent is the most legible signal; bytes/sec is noisy and varies
       // wildly across connections, so we keep the banner to one number.
       return `Downloading Mordor ${v}${status.progress ? ` · ${status.progress.percent}%` : ""}`;
     case "downloaded":
       return `Mordor ${v} is ready to install.`;
-    case "unsupported":
-      return `A newer Mordor may be available. In-app updates require a signed build — download manually for now.`;
     default:
       return "";
   }

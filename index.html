@@ -7,6 +7,32 @@
     <link rel="icon" type="image/x-icon" href="./media/web/favicon.ico" />
     <link rel="preconnect" href="https://rsms.me/" />
     <link rel="stylesheet" href="https://rsms.me/inter/inter.css" />
+    <script>
+      // Resolve the theme before React mounts so the first paint matches the
+      // user's saved preference. Without this, the renderer paints in the
+      // default (light) palette and then flips to dark once useThemeSync runs
+      // its effect, which is jarring on every cold launch. Reads from the
+      // same localStorage key the zustand `persist` middleware uses for
+      // mordor-preferences, falls back to the OS preference for `auto`.
+      (function () {
+        try {
+          var raw = localStorage.getItem("mordor-preferences");
+          var pref = raw ? (JSON.parse(raw).state || {}).themePreference : "auto";
+          if (pref !== "light" && pref !== "dark") pref = "auto";
+          var dark =
+            pref === "dark" ||
+            (pref === "auto" &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          var root = document.documentElement;
+          root.dataset.theme = dark ? "dark" : "light";
+          root.dataset.themePreference = pref;
+        } catch (e) {
+          // localStorage unavailable or JSON malformed — fall through to the
+          // CSS default. useThemeSync will still correct it on mount.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
