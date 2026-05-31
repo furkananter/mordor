@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { ChevronDown } from "lucide-react";
 import type { PostgresSchemaNode } from "../../../core/postgres/types";
 import { ProfileListItem } from "../../../core/ipc";
@@ -13,8 +14,20 @@ import { TableRow } from "./TableRow";
  *
  * `keyspace` on TableIdentity carries the schema name here — see schemaHandlers
  * for the rationale on the temporary naming overload.
+ *
+ * Wrapped in memo so unrelated app-wide state changes (Add dialog open/close,
+ * busy flag flips) don't re-render every schema block on a Postgres profile
+ * with hundreds of schemas.
  */
-export function PostgresSchemaList({
+export const PostgresSchemaList = memo(PostgresSchemaListImpl, (prev, next) =>
+  prev.profile.id === next.profile.id &&
+  prev.schema === next.schema &&
+  prev.selectedTable?.profileId === next.selectedTable?.profileId &&
+  prev.selectedTable?.keyspace === next.selectedTable?.keyspace &&
+  prev.selectedTable?.table === next.selectedTable?.table
+);
+
+function PostgresSchemaListImpl({
   profile,
   schema,
   selectedTable,

@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Copy, Table2 } from "lucide-react";
 import { TableIdentity } from "../../../core/shared/messages";
 import {
@@ -9,7 +10,30 @@ import {
   ContextMenuTrigger
 } from "../../components/ui/ContextMenu";
 
-export function TableRow({
+/**
+ * Wrapped in React.memo so re-renders triggered higher up the tree (status
+ * store flips, modal open/close, etc.) don't ripple into every table row in
+ * the sidebar. With memo, a Postgres profile that exposes thousands of
+ * tables re-reconciles only the rows whose `active` flag actually flipped.
+ * Pre-memo, even closing the Add dialog took noticeable time because every
+ * row's ContextMenu got re-evaluated.
+ *
+ * Custom comparator: `onOpenTable` is passed down as a fresh closure on
+ * every App render (the callback isn't wrapped in useCallback at the source
+ * because the rest of the tree doesn't care). We compare only the props
+ * that actually drive what TableRow paints, so memo isn't defeated by
+ * identity-only churn on the handler.
+ */
+export const TableRow = memo(TableRowImpl, (prev, next) =>
+  prev.active === next.active &&
+  prev.label === next.label &&
+  prev.keyspace === next.keyspace &&
+  prev.identity.profileId === next.identity.profileId &&
+  prev.identity.table === next.identity.table &&
+  prev.identity.keyspace === next.identity.keyspace
+);
+
+function TableRowImpl({
   identity,
   keyspace,
   active,
