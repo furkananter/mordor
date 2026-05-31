@@ -45,6 +45,8 @@ async function createWindow(): Promise<BrowserWindow> {
     minHeight: 620,
     title: "Mordor",
     ...(icon ? { icon } : {}),
+    // Matches the renderer's --bg so the brief pre-mount gap (before React
+    // paints the in-app boot splash) is the same cream, not a white flash.
     backgroundColor: "#faf8f3",
     titleBarOverlay: {
       color: "#faf8f3",
