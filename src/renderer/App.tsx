@@ -22,6 +22,7 @@ import { useUpdaterStore } from "./store/updater";
 export function App() {
   // Stores
   const profiles = useConnectionStore((state) => state.profiles);
+  const init = useConnectionStore((state) => state.init);
   const detectLocal = useConnectionStore((state) => state.detectLocal);
   const createProfile = useConnectionStore((state) => state.createProfile);
   const updateProfile = useConnectionStore((state) => state.updateProfile);
@@ -58,24 +59,28 @@ export function App() {
   // App-level state
   const [showSettings, setShowSettings] = useState(false);
   const [editingProfile, setEditingProfile] = useState<ProfileListItem | undefined>(undefined);
-  const [booting, setBooting] = useState(true);
 
   // Side effects + hooks
   useEffect(() => {
-    // Boot routine: run local-database detection behind the in-app splash
-    // overlay, then drop the overlay to reveal the populated UI. detectLocal()
-    // loads profiles as a side effect (detect result, or a listProfiles()
-    // fallback), so a separate init() is unnecessary. runWithStatus swallows
-    // errors, so the promise always settles — clearing `booting` in finally
-    // guarantees the overlay lifts even if detection fails.
-    void (async () => {
-      try {
-        await detectLocal();
-      } finally {
-        setBooting(false);
-      }
-    })();
-  }, [detectLocal]);
+    // Defer the profile fetch off the first paint. The Sidebar renders an
+    // empty list until profiles arrive a tick later, which keeps the initial
+    // commit small. requestIdleCallback when available, otherwise a tiny
+    // setTimeout so the IPC round-trip doesn't extend the first frame.
+    // Local detection is user-driven (Detect button) — running it on boot
+    // tarpits the app for 5-15 s on cold start when Docker / DB probes time
+    // out, which makes the packaged build feel broken.
+    const idle = (window as unknown as {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+      cancelIdleCallback?: (id: number) => void;
+    });
+    const handle = idle.requestIdleCallback
+      ? idle.requestIdleCallback(() => void init(), { timeout: 400 })
+      : window.setTimeout(() => void init(), 0);
+    return () => {
+      if (idle.cancelIdleCallback && idle.requestIdleCallback) idle.cancelIdleCallback(handle);
+      else window.clearTimeout(handle);
+    };
+  }, [init]);
   useEffect(() => {
     // Same idle deferral pattern: the updater state machine pulls its initial
     // snapshot over IPC and subscribes to pushes. Pushed status changes drive
@@ -193,45 +198,6 @@ export function App() {
         onSubmit={handleFormSubmit}
         onClose={handleFormClose}
       />
-
-      <SplashOverlay done={!booting} />
     </main>
-  );
-}
-
-/**
- * Full-window boot overlay shown while startup local-database detection runs.
- * Sits above the whole app (not a separate native window) and fades out once
- * `done` flips true, then unmounts so it never intercepts pointer events after
- * boot. Themed with the same tokens as the shell, so it tracks light/dark.
- */
-function SplashOverlay({ done }: { done: boolean }) {
-  const [mounted, setMounted] = useState(true);
-  useEffect(() => {
-    if (!done) return;
-    const id = window.setTimeout(() => setMounted(false), 350);
-    return () => window.clearTimeout(id);
-  }, [done]);
-  if (!mounted) return null;
-  return (
-    <div
-      className={`fixed inset-0 z-[100] flex flex-col items-center justify-center gap-5 bg-bg transition-opacity duration-300 ${
-        done ? "pointer-events-none opacity-0" : "opacity-100"
-      }`}
-      aria-hidden={done}
-    >
-      <img
-        src="./splash-icon.png"
-        alt=""
-        width={84}
-        height={84}
-        className="rounded-[18px] shadow-sm"
-      />
-      <div className="text-[26px] font-semibold tracking-tight text-text">Mordor</div>
-      <div className="flex items-center gap-2 text-[12.5px] text-muted">
-        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-line border-t-accent" />
-        <span>Detecting local databases…</span>
-      </div>
-    </div>
   );
 }

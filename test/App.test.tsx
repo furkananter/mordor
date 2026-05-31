@@ -117,6 +117,22 @@ describe("Cassandra Desk renderer", () => {
     await waitFor(() => expect(api.createProfile).toHaveBeenCalledWith(expect.objectContaining({ name: "Dev" })));
   });
 
+  // Regression guard for the v0.5.0 splash-screen feature, which made the
+  // mount effect await detectLocal(). detectLocal runs Docker introspection,
+  // TCP probes, and a Postgres credential matrix on the main process — fine
+  // in dev, but in packaged builds it tarpitted the first 5-15 s of every
+  // cold start and made the app feel frozen. Boot should only ask for the
+  // list of saved profiles; local detection is the Detect button's job.
+  it("does not trigger local detection on boot", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(api.listProfiles).toHaveBeenCalled());
+    // Give the idle-callback init() a couple more ticks in case the detection
+    // call were scheduled after listProfiles — we still expect zero hits.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(api.detectLocalConnections).not.toHaveBeenCalled();
+  });
+
   it("shows errors from main process operations", async () => {
     vi.mocked(api.listProfiles).mockRejectedValue(new Error("Config is unreadable."));
     render(<App />);
