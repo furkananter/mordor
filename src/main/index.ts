@@ -99,6 +99,11 @@ async function createWindow(): Promise<BrowserWindow> {
  * user a 5-10 s cold start with no upside — there's no live remote content,
  * no useful "back to a fresh state" semantics, and accidental Cmd+R was a
  * recurring frustration. Dev builds keep the defaults so we can iterate.
+ *
+ * Keep `toggleDevTools` (Cmd+Option+I) wired up — when users hit perf or UI
+ * problems in the wild, the devtools console is the only way to capture a
+ * trace or read the perf-zone warnings. The shortcut is mac-standard; nobody
+ * triggers it by accident.
  */
 function installProductionMenu(): void {
   if (!app.isPackaged) return;
@@ -113,6 +118,8 @@ function installProductionMenu(): void {
         { role: "zoomOut" },
         { type: "separator" },
         { role: "togglefullscreen" },
+        { type: "separator" },
+        { role: "toggleDevTools" },
       ],
     },
     { role: "windowMenu" },
