@@ -37,9 +37,13 @@ on:
           - minor
           - major
 
-# Need write access to push the bump commit + tag back to the repo.
+# `contents: write` lets us push the bump commit + tag.
+# `actions: write` lets us dispatch release.yml against the new tag — the
+# default token has only read access to the Actions API, so without this
+# the `gh workflow run` call returns 403.
 permissions:
   contents: write
+  actions: write
 
 # Never let two release-cutters race — a second run must wait, not interleave
 # version bumps.
