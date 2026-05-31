@@ -60,29 +60,65 @@ Mordor uses [`electron-updater`](https://www.electron.build/auto-update) against
 GitHub Releases. Each released version is delivered automatically to running
 clients on platforms where the build is signed.
 
-### Cutting a release (recommended: CI)
+> **Every change that ships to users needs a release.** A merge to `main` does
+> not reach anyone on its own — clients only update when a new GitHub Release
+> exists. The flow below turns "merged" into "shipped".
 
-The `.github/workflows/release.yml` workflow does the multi-platform build and
-publish on every tag push. Day-to-day flow:
+### Commit conventions (this is what drives the version bump)
+
+The release tooling reads your commit messages to decide the next version, so
+**every commit must follow [Conventional Commits](https://www.conventionalcommits.org/)**:
+
+```
+<type>(optional scope): <description>
+```
+
+| Commit prefix | Example | Release bump |
+| --- | --- | --- |
+| `feat:` | `feat(redis): add key TTL editor` | **minor** (`1.2.0` → `1.3.0`) |
+| `fix:` / `perf:` / `chore:` / `docs:` / `refactor:` / … | `fix(migrations): scope list to profile` | **patch** (`1.2.0` → `1.2.1`) |
+| `!` after the type, or a `BREAKING CHANGE:` footer | `feat!: drop legacy profile format` | **major** (`1.2.0` → `2.0.0`) |
+
+The highest bump found among all commits since the last `vX.Y.Z` tag wins
+(one `feat:` in the range makes the whole release a minor, one `!` makes it a
+major). Anything that doesn't match a recognized type is treated as a patch, so
+when in doubt prefix with `fix:` or `chore:`.
+
+### Cutting a release (one click)
+
+After your PR is merged to `main`:
+
+1. Go to **Actions → "Release (cut version)" → Run workflow**.
+2. Leave **bump** on `auto` to derive the version from the commits (above), or
+   pick `patch`/`minor`/`major` to force a specific level.
+3. Run it.
+
+`.github/workflows/release-cut.yml` then bumps `package.json`, commits the bump
+to `main` as `chore(release): vX.Y.Z`, and pushes the matching `vX.Y.Z` tag.
+
+Pushing that tag triggers `.github/workflows/release.yml`, which fans out three
+matrix jobs (`macos-latest`, `ubuntu-latest`, `windows-latest`) — each runs
+`electron-builder --publish always` to create a draft GitHub Release for the
+new version and upload its artifacts. Both jobs use the built-in `GITHUB_TOKEN`;
+no PAT needed.
+
+When all platforms finish, open the draft release on GitHub, edit notes, hit
+**Publish release**. Connected Mordor clients pick it up on their next check
+(the manifest read is what auto-updater watches; draft releases don't count,
+only published ones).
+
+### Cutting a release (manual tag, if you skip the workflow)
+
+You can still bump and tag by hand — `release.yml` fires on any `v*` tag push:
 
 ```sh
 # bump the version, create the matching tag, commit it
-npm version patch -m "chore: release v%s"
+npm version patch -m "chore(release): v%s"
 # or `npm version minor` / `npm version major`
 
 # push the commit AND the tag
 git push --follow-tags
 ```
-
-That fires off three matrix jobs (`macos-latest`, `ubuntu-latest`,
-`windows-latest`) — each runs `electron-builder --publish always`, which
-creates a draft GitHub Release matching the new version and uploads its
-artifacts to it. The job uses the built-in `GITHUB_TOKEN`, no PAT needed.
-
-When all platforms finish, open the draft release on GitHub, edit notes,
-hit **Publish release**. Connected Mordor clients pick it up on their next
-check (the manifest read is what auto-updater watches; draft releases don't
-count, only published ones).
 
 ### Cutting a release (manual fallback)
 
@@ -101,10 +137,11 @@ artifacts in `release/` if you just want to inspect them.
 
 - Boot completes → ~10 s later the main process asks GitHub for the latest
   release manifest.
-- New version found → background download starts; a one-line banner appears
-  at the top of the workspace with progress.
-- Download finishes → banner switches to **Restart to install**; clicking quits
-  and relaunches into the new version.
+- New version found → background download starts; a compact toast appears in
+  the top-right corner with progress (it floats over the UI and does not shift
+  the layout).
+- Download finishes → the toast switches to **Restart to install**; clicking
+  quits and relaunches into the new version.
 - Manual control lives in **Settings → Updates**: a `Check now` button with the
   last-checked timestamp and current status.
 
