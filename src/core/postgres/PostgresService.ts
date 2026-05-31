@@ -64,6 +64,36 @@ export const POSTGRES_PREVIEW_LIMIT = 100;
 
 const SYSTEM_SCHEMAS = new Set(["pg_catalog", "information_schema", "pg_toast"]);
 
+/**
+ * Extension-internal schemas we hide from the sidebar tree by default. These
+ * are bookkeeping schemas owned by Postgres extensions (TimescaleDB chunks,
+ * Supabase auth/realtime/storage, pg_partman) — the user typically only cares
+ * about their own application schemas. Including them tanks the renderer:
+ * a busy TimescaleDB instance can have thousands of `_hyper_*_*_chunk` tables
+ * in `_timescaledb_internal`, and rendering every node turns every click into
+ * a re-layout pass against a giant tree.
+ *
+ * Wildcards (LIKE patterns) are interpolated into the schema-listing query so
+ * the database — not the renderer — drops them first.
+ */
+const EXTENSION_INTERNAL_SCHEMA_PATTERNS = [
+  // TimescaleDB
+  "\\_timescaledb\\_%",
+  // Supabase / pg_graphql / pg_net / pg_cron
+  "\\_realtime",
+  "\\_analytics",
+  "pgsodium",
+  "pgsodium\\_masks",
+  "supabase\\_functions",
+  "supabase\\_migrations",
+  "graphql",
+  "graphql\\_public",
+  "net",
+  "vault",
+  // pg_partman bookkeeping
+  "partman",
+];
+
 export class PostgresService {
   private readonly connections = new Map<string, ActiveConnection>();
 
@@ -389,6 +419,14 @@ export class PostgresService {
   }
 
   private async fetchSchema(client: pg.Client): Promise<PostgresSchemaNode[]> {
+    // Build the NOT LIKE clause for extension-internal schemas. Doing the
+    // filter in SQL means TimescaleDB's thousands of `_hyper_*_*_chunk` rows
+    // never cross the wire, so a busy hypertable doesn't tarpit the renderer.
+    const extensionPatterns = EXTENSION_INTERNAL_SCHEMA_PATTERNS.map(
+      (_pat, idx) => `nspname NOT LIKE $${idx + 1} ESCAPE '\\'`
+    ).join(" AND ");
+    const params = EXTENSION_INTERNAL_SCHEMA_PATTERNS;
+
     // Two queries: one for user schemas (so empty ones like a fresh `public`
     // still show in the sidebar), one for the actual tables/views. Listing the
     // namespaces separately means the user sees "this DB has nothing yet"
@@ -400,7 +438,9 @@ export class PostgresService {
          WHERE nspname NOT IN ('pg_catalog','information_schema','pg_toast')
            AND nspname NOT LIKE 'pg_temp_%'
            AND nspname NOT LIKE 'pg_toast_temp_%'
+           AND ${extensionPatterns}
          ORDER BY nspname`,
+        params,
       ),
       client.query<{
         schema_name: string;
@@ -417,7 +457,9 @@ export class PostgresService {
            AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')
            AND n.nspname NOT LIKE 'pg_temp_%'
            AND n.nspname NOT LIKE 'pg_toast_temp_%'
+           AND ${extensionPatterns.replace(/nspname/g, "n.nspname")}
          ORDER BY n.nspname, c.relname`,
+        params,
       ),
     ]);
 
