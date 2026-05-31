@@ -13,6 +13,7 @@ import {
   DetectedConnection,
 } from "../../core/db/types";
 import { PostgresService } from "../../core/postgres/PostgresService";
+import { detectDockerPostgres } from "../docker/dockerProbe";
 
 // Same lazy-load pattern as PostgresService — keep `pg` out of the boot path
 // when the user never touches a Postgres profile (detect or otherwise).
@@ -56,36 +57,76 @@ export class PostgresAdapter implements DatabaseAdapter {
     existing: ConnectionProfile[],
     log: (message: string) => void,
   ): Promise<DetectedConnection[]> {
-    // Skip if any local Postgres profile is already saved — re-running detect
-    // shouldn't create duplicates. If the saved profile has bad credentials,
-    // the user can delete it and rerun.
-    const savedLocal = existing.find(
-      (profile) =>
-        isPostgresProfile(profile) &&
-        profile.port === 5432 &&
-        (profile.host === "127.0.0.1" || profile.host === "::1" || profile.host === "localhost"),
-    );
-    if (savedLocal) {
-      // Surface a hint instead of silently doing nothing. Previously the
-      // detect button looked broken when a profile saved with wrong
-      // credentials blocked re-probing — the user had no way to tell why.
-      log(
-        `Local Postgres profile "${savedLocal.name}" already exists. ` +
-          `Delete it first if you want Detect to re-probe credentials.`,
+    const results: DetectedConnection[] = [];
+
+    // --- Docker container probe ---
+    // Read credentials directly from container env vars (POSTGRES_USER/PASSWORD/DB).
+    // This covers project-specific setups (e.g. bourse/bourse/bourse) that the
+    // generic credential matrix below would never guess.
+    const dockerCandidates = await detectDockerPostgres(log);
+    const dockerPorts = new Set<number>();
+
+    for (const dc of dockerCandidates) {
+      const alreadySaved = existing.find(
+        (p) =>
+          isPostgresProfile(p) &&
+          p.host === dc.host &&
+          p.port === dc.port,
       );
-      return [];
+      if (alreadySaved) {
+        log(
+          `Docker container "${dc.containerName}" (${dc.host}:${dc.port}) already saved as "${alreadySaved.name}". ` +
+            `Delete it first to re-detect.`,
+        );
+        dockerPorts.add(dc.port);
+        continue;
+      }
+
+      const open = await probeTcp(dc.host, dc.port, PROBE_TIMEOUT_MS);
+      if (!open) {
+        log(`Docker container "${dc.containerName}" port ${dc.port} not reachable — skipping.`);
+        continue;
+      }
+
+      log(`Docker container "${dc.containerName}" detected at ${dc.host}:${dc.port} (user=${dc.user}, db=${dc.database})`);
+      dockerPorts.add(dc.port);
+
+      const draft: ConnectionDraft = {
+        type: "postgres",
+        name: dc.containerName,
+        host: dc.host,
+        port: String(dc.port),
+        database: dc.database,
+        username: dc.user,
+        password: dc.password,
+        useTls: false,
+      };
+      results.push({ draft, notes: `Docker container (user=${dc.user})` });
     }
 
+    // --- Generic localhost probe (non-Docker) ---
+    // Skip ports already covered by Docker so we don't double-detect.
     for (const candidate of LOCAL_CANDIDATES) {
+      if (dockerPorts.has(candidate.port)) continue;
+
+      const savedLocal = existing.find(
+        (profile) =>
+          isPostgresProfile(profile) &&
+          profile.port === candidate.port &&
+          (profile.host === "127.0.0.1" || profile.host === "::1" || profile.host === "localhost"),
+      );
+      if (savedLocal) {
+        log(
+          `Local Postgres profile "${savedLocal.name}" already exists. ` +
+            `Delete it first if you want Detect to re-probe credentials.`,
+        );
+        continue;
+      }
+
       const open = await probeTcp(candidate.host, candidate.port, PROBE_TIMEOUT_MS);
       if (!open) continue;
       log(`Postgres TCP open at ${candidate.host}:${candidate.port}, probing credentials…`);
 
-      // Local-discovery shortcut: try the handful of credential combos that
-      // cover ~all dev setups (docker image, brew install, postgres.app).
-      // We're on localhost — the alternative is forcing the user to guess
-      // which user/password their own postgres install uses, which is the
-      // "lokal db'de niye bu kadar uğraşıyoruz" frustration we want to kill.
       const working = await probeCredentials(candidate, log);
       if (working) {
         const draft: ConnectionDraft = {
@@ -98,12 +139,10 @@ export class PostgresAdapter implements DatabaseAdapter {
           password: working.password,
           useTls: false,
         };
-        return [{ draft, notes: `Local Postgres (user=${working.user})` }];
+        results.push({ draft, notes: `Local Postgres (user=${working.user})` });
+        continue;
       }
 
-      // TCP open but no credentials worked — surface a draft with a note so
-      // the user can edit and try their own values without having to type the
-      // whole thing from scratch.
       log(`Postgres at ${candidate.host}:${candidate.port} rejected all default credentials — edit the profile after saving.`);
       const draft: ConnectionDraft = {
         type: "postgres",
@@ -114,9 +153,10 @@ export class PostgresAdapter implements DatabaseAdapter {
         username: "postgres",
         useTls: false,
       };
-      return [{ draft, notes: "Local Postgres (credentials required)" }];
+      results.push({ draft, notes: "Local Postgres (credentials required)" });
     }
-    return [];
+
+    return results;
   }
 
   isLocalCandidate(profile: ConnectionProfile): boolean {
