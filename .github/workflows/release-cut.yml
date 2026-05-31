@@ -15,6 +15,15 @@ name: Release (cut version)
 # An optional `bump` input lets a maintainer override the derived level when a
 # release needs to be forced up (e.g. cutting a minor with only fix: commits).
 on:
+  # Auto-cut a release on every merge to main. The job skips itself when the
+  # triggering commit is already a version bump (chore(release):) so there is
+  # no infinite loop. The semver level is derived from Conventional Commits
+  # since the last vX.Y.Z tag (feat → minor, ! / BREAKING CHANGE → major,
+  # anything else → patch).
+  push:
+    branches: [main]
+  # Manual override: useful for forcing a specific bump level or re-running a
+  # botched release without pushing a new commit.
   workflow_dispatch:
     inputs:
       bump:
@@ -43,6 +52,12 @@ jobs:
     name: Cut release
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Skip when the push is the version-bump commit we just made — otherwise
+    # we'd loop: bump → push → trigger → bump → push → …
+    # workflow_dispatch runs always (the human already knows what they're doing).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      !startsWith(github.event.head_commit.message, 'chore(release):')
     steps:
       # Releases are only ever cut from main. Running this on another branch
       # would tag the wrong tree, so fetch and pin main explicitly. Full
@@ -69,8 +84,9 @@ jobs:
         id: level
         run: |
           set -euo pipefail
+          # inputs.bump is empty when triggered by push (not workflow_dispatch)
           OVERRIDE="${{ inputs.bump }}"
-          if [ "$OVERRIDE" != "auto" ]; then
+          if [ -n "$OVERRIDE" ] && [ "$OVERRIDE" != "auto" ]; then
             echo "bump=$OVERRIDE" >> "$GITHUB_OUTPUT"
             echo "Using explicit override: $OVERRIDE"
             exit 0
