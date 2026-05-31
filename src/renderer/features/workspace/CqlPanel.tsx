@@ -1,7 +1,15 @@
 import { lazy, Suspense, useMemo, useState } from "react";
-import { Play } from "lucide-react";
+import { History, Play, Zap } from "lucide-react";
 import { QueryResultPayload, TableSchemaPayload } from "../../../core/shared/messages";
 import { Button } from "../../components/ui/Button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "../../components/ui/DropdownMenu";
 const CqlEditor = lazy(() => import("../../components/ui/cql-editor/CqlEditor").then((m) => ({ default: m.CqlEditor })));
 import { DataTable } from "../../components/ui/data-table/DataTable";
 import { useLayoutStore } from "../../store/layout";
@@ -17,7 +25,11 @@ export function CqlPanel({
   onRun,
   title = "CQL Console",
   hideQueryMode = false,
-  dialect = "cassandra"
+  dialect = "cassandra",
+  history = [],
+  onExplain,
+  explainResult,
+  explaining = false,
 }: {
   queryText: string;
   queryResult: QueryResultPayload | undefined;
@@ -37,6 +49,13 @@ export function CqlPanel({
    * correctly and the completion list isn't full of CQL-only tokens.
    */
   dialect?: "cassandra" | "postgres";
+  /** Per-profile query history, newest first. */
+  history?: string[];
+  /** If provided, renders an Explain button alongside Run (Postgres only). */
+  onExplain?: () => Promise<void>;
+  /** When set, renders the EXPLAIN plan text instead of the DataTable. */
+  explainResult?: string | null;
+  explaining?: boolean;
 }) {
   const editorHeight = useLayoutStore((state) => state.cqlEditorHeight);
   const setEditorHeight = useLayoutStore((state) => state.setCqlEditorHeight);
@@ -67,6 +86,8 @@ export function CqlPanel({
     };
   }, [schema]);
 
+  const busy = loading || explaining;
+
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-panel">
       <div className="flex items-center justify-between gap-2.5 border-b border-line-soft px-4 py-2">
@@ -75,8 +96,22 @@ export function CqlPanel({
           <span className="text-[11.5px] text-muted">Cmd/Ctrl + Enter to run</span>
         </div>
         <div className="flex items-center gap-2">
+          {history.length > 0 && (
+            <HistoryDropdown history={history} onSelect={onChange} />
+          )}
           {hideQueryMode ? null : <QueryModeBadge />}
-          <Button variant="primary" onClick={() => void onRun()} disabled={loading}>
+          {onExplain && (
+            <Button
+              variant="ghost"
+              onClick={() => void onExplain()}
+              disabled={busy || !queryText.trim()}
+              tooltip="EXPLAIN ANALYZE"
+            >
+              <Zap size={12} strokeWidth={1.7} />
+              {explaining ? "Explaining…" : "Explain"}
+            </Button>
+          )}
+          <Button variant="primary" onClick={() => void onRun()} disabled={busy}>
             <Play size={12} strokeWidth={1.7} />
             {loading ? "Running" : "Run"}
           </Button>
@@ -110,22 +145,84 @@ export function CqlPanel({
         />
 
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          {queryResult ? (
-            <p className="border-b border-line-soft px-3 py-2 font-mono text-[11px] text-muted">
-              <span className="mr-2 text-accent">last</span>
-              <span className="break-all">{queryResult.cql}</span>
-            </p>
-          ) : null}
-          <DataTable
-            result={queryResult}
-            loading={loading}
-            emptyTitle="No query result"
-            emptyBody="Run a SELECT query to see rows here."
-            enableSelection
-          />
+          {explainResult != null ? (
+            <ExplainPanel plan={explainResult} />
+          ) : (
+            <>
+              {queryResult ? (
+                <p className="border-b border-line-soft px-3 py-2 font-mono text-[11px] text-muted">
+                  <span className="mr-2 text-accent">last</span>
+                  <span className="break-all">{queryResult.cql}</span>
+                </p>
+              ) : null}
+              <DataTable
+                result={queryResult}
+                loading={loading}
+                emptyTitle="No query result"
+                emptyBody="Run a SELECT query to see rows here."
+                enableSelection
+              />
+            </>
+          )}
         </section>
       </div>
     </section>
+  );
+}
+
+function HistoryDropdown({
+  history,
+  onSelect,
+}: {
+  history: string[];
+  onSelect: (entry: string) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="icon" tooltip="Query history">
+          <History size={14} strokeWidth={1.7} />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-w-[400px] min-w-[260px]">
+        <DropdownMenuLabel>Recent queries</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {history.slice(0, 15).map((entry, i) => (
+          <DropdownMenuItem
+            key={i}
+            onSelect={() => onSelect(entry)}
+            className="flex-col items-start gap-0"
+          >
+            <span className="w-full truncate font-mono text-[11.5px] text-text">
+              {entry.length > 80 ? entry.slice(0, 80) + "…" : entry}
+            </span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function ExplainPanel({ plan }: { plan: string }) {
+  // Extract timing summary from the last two lines of the plan text
+  const lines = plan.trimEnd().split("\n");
+  const summaryLines = lines.filter(
+    (l) => l.includes("Planning Time") || l.includes("Execution Time"),
+  );
+  const summary = summaryLines.join(" · ").replace(/\s+/g, " ").trim();
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      {summary && (
+        <p className="border-b border-line-soft px-3 py-2 font-mono text-[11px] text-muted">
+          <span className="mr-2 text-accent">explain</span>
+          <span>{summary}</span>
+        </p>
+      )}
+      <pre className="min-h-0 flex-1 overflow-auto whitespace-pre p-3 font-mono text-[11.5px] leading-relaxed text-text">
+        {plan}
+      </pre>
+    </div>
   );
 }
 

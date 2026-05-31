@@ -42,7 +42,8 @@ export function ClusterWorkspace({
   queryResult,
   queryLoading,
   onQueryChange,
-  onRun
+  onRun,
+  history = [],
 }: {
   profile: ProfileListItem;
   queryText: string;
@@ -50,6 +51,7 @@ export function ClusterWorkspace({
   queryLoading: boolean;
   onQueryChange(value: string): void;
   onRun(): Promise<void>;
+  history?: string[];
 }) {
   const activeTab = useLayoutStore((state) => state.activeTab);
   const setActiveTab = useLayoutStore((state) => state.setActiveTab);
@@ -77,6 +79,7 @@ export function ClusterWorkspace({
               onChange={onQueryChange}
               onRun={onRun}
               placeholder={`-- Run CQL against ${profile.name}\nSELECT keyspace_name, table_name FROM system_schema.tables;`}
+              history={history}
             />
           ) : tab === "migrations" ? (
             <Suspense fallback={<div className="grid h-full place-items-center text-[11.5px] text-muted">Loading migrations…</div>}>

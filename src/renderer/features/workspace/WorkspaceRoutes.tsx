@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { ProfileListItem } from "../../../core/ipc";
 import { TableIdentity } from "../../../core/shared/messages";
 import { usePreferencesStore } from "../../store/preferences";
@@ -65,6 +65,17 @@ export function WorkspaceRoutes({
   const queryState = useQueryStore((state) => state.queryState);
   const setQueryText = useQueryStore((state) => state.setQueryText);
   const runQuery = useQueryStore((state) => state.runQuery);
+  const history = useQueryStore((state) => state.history);
+  const loadHistory = useQueryStore((state) => state.loadHistory);
+
+  const selectedCluster = findProfile(profiles, selectedProfileId);
+
+  // Reload per-profile query history whenever the active cluster changes
+  useEffect(() => {
+    if (selectedCluster?.id) {
+      loadHistory(selectedCluster.id);
+    }
+  }, [selectedCluster?.id, loadHistory]);
 
   let content: React.ReactNode;
   if (showSettings) {
@@ -85,7 +96,6 @@ export function WorkspaceRoutes({
   } else if (selectedTable) {
     content = <TableWorkspace />;
   } else {
-    const selectedCluster = findProfile(profiles, selectedProfileId);
     if (selectedCluster?.type === "cassandra") {
       content = (
         <ClusterWorkspace
@@ -95,6 +105,7 @@ export function WorkspaceRoutes({
           queryLoading={queryState === "loading"}
           onQueryChange={setQueryText}
           onRun={runQuery}
+          history={history}
         />
       );
     } else if (selectedCluster?.type === "postgres") {
@@ -106,6 +117,7 @@ export function WorkspaceRoutes({
           queryLoading={queryState === "loading"}
           onQueryChange={setQueryText}
           onRun={runQuery}
+          history={history}
         />
       );
     } else {
