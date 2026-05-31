@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, Radio } from "lucide-react";
+import { ChevronDown, ChevronsDown, Radio } from "lucide-react";
 import { PreviewRowsPayload, TableSchemaPayload } from "../../../core/shared/messages";
 import { Button } from "../../components/ui/Button";
 import { DataTable, DataTableDeleteConfig } from "../../components/ui/data-table/DataTable";
@@ -27,7 +27,9 @@ export function DataPanel({
   const reloadSelectedTable = useSchemaStore((state) => state.reloadSelectedTable);
   const refreshPreviewSilent = useSchemaStore((state) => state.refreshPreviewSilent);
   const loadMorePreview = useSchemaStore((state) => state.loadMorePreview);
+  const loadAllPreview = useSchemaStore((state) => state.loadAllPreview);
   const previewLoadingMore = useSchemaStore((state) => state.previewLoadingMore);
+  const previewLoadingAll = useSchemaStore((state) => state.previewLoadingAll);
   const setError = useStatusStore((state) => state.setError);
   const [liveEnabled, setLiveEnabled] = useState(false);
 
@@ -151,14 +153,26 @@ export function DataPanel({
         actions={
           <div className="flex items-center gap-2">
             {hasMore ? (
-              <Button
-                onClick={() => void loadMorePreview()}
-                disabled={previewLoadingMore}
-                tooltip={`Fetch the next ${preview?.limit ?? 1000} rows from Cassandra`}
-              >
-                <ChevronDown size={12} strokeWidth={1.7} />
-                <span>{previewLoadingMore ? "Loading…" : `Load ${preview?.limit ?? 1000} more`}</span>
-              </Button>
+              <>
+                <Button
+                  onClick={() => void loadMorePreview()}
+                  disabled={previewLoadingMore || previewLoadingAll}
+                  tooltip={`Fetch the next ${preview?.limit ?? 1000} rows`}
+                >
+                  <ChevronDown size={12} strokeWidth={1.7} />
+                  <span>{previewLoadingMore ? "Loading…" : `Load ${preview?.limit ?? 1000} more`}</span>
+                </Button>
+                <Button
+                  onClick={() => void loadAllPreview()}
+                  disabled={previewLoadingMore || previewLoadingAll}
+                  tooltip="Fetch every remaining row, then Select all to delete them in one go"
+                >
+                  <ChevronsDown size={12} strokeWidth={1.7} />
+                  <span>
+                    {previewLoadingAll ? `Loading… (${preview?.rows.length ?? 0})` : "Load all"}
+                  </span>
+                </Button>
+              </>
             ) : null}
             {liveEnabled ? <LiveStatusBadge lastTickAt={lastTickAt} pending={pending} intervalMs={liveIntervalMs} /> : null}
             <label className="flex items-center gap-1 text-[11.5px] text-muted">
