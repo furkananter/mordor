@@ -43,7 +43,7 @@ export function UpdateBanner() {
   return (
     <div
       role="status"
-      className="flex items-center justify-between gap-3 border-b border-line-soft bg-accent-soft px-4 py-1.5 text-[12px] text-text"
+      className="pointer-events-auto fixed right-4 top-4 z-50 flex w-[22rem] max-w-[calc(100vw-2rem)] items-center justify-between gap-3 rounded-ui border border-line-soft bg-panel px-4 py-2.5 text-[12px] text-text shadow-lg"
     >
       <div className="flex min-w-0 items-center gap-2">
         <Download size={12} strokeWidth={1.7} className="shrink-0 text-accent" />
