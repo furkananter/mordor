@@ -107,7 +107,8 @@
       {
         "provider": "github",
         "owner": "furkananter",
-        "repo": "mordor"
+        "repo": "mordor",
+        "releaseType": "release"
       }
     ],
     "mac": {
