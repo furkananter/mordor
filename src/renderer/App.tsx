@@ -97,41 +97,45 @@ export function App() {
     { disabled: sidebarCollapsed }
   );
 
-  // Handlers
-  const handleOpenAdd = () => {
+  // Handlers — wrapped in useCallback so the deep tree (sidebar's connection
+  // nodes, each with hundreds of memoized TableRow children) doesn't see a
+  // fresh closure on every App render. Without this, React.memo on TableRow
+  // would re-render every row whenever any unrelated state in App changes
+  // (modal toggle, busy flag, etc.).
+  const handleOpenAdd = useCallback(() => {
     setEditingProfile(undefined);
     setShowForm(true);
-  };
-  const handleEditProfile = (profile: ProfileListItem) => {
+  }, [setShowForm]);
+  const handleEditProfile = useCallback((profile: ProfileListItem) => {
     setEditingProfile(profile);
     setShowForm(true);
-  };
-  const handleFormSubmit = async (input: CreateProfileInput) => {
+  }, [setShowForm]);
+  const handleFormSubmit = useCallback(async (input: CreateProfileInput) => {
     if (editingProfile) await updateProfile(editingProfile.id, input);
     else await createProfile(input);
-  };
-  const handleFormClose = () => {
+  }, [editingProfile, updateProfile, createProfile]);
+  const handleFormClose = useCallback(() => {
     setShowForm(false);
     setEditingProfile(undefined);
-  };
-  const handleShowHome = () => {
+  }, [setShowForm]);
+  const handleShowHome = useCallback(() => {
     setShowSettings(false);
     clearTable();
     clearRedis();
-  };
-  const handleSelectProfile = (profileId: string) => {
+  }, [clearTable, clearRedis]);
+  const handleSelectProfile = useCallback((profileId: string) => {
     setShowSettings(false);
     clearRedis();
     selectProfile(profileId);
-  };
-  const handleOpenRedisDb = (selection: Parameters<typeof openRedisDb>[0]) => {
+  }, [clearRedis, selectProfile]);
+  const handleOpenRedisDb = useCallback((selection: Parameters<typeof openRedisDb>[0]) => {
     setShowSettings(false);
     void openRedisDb(selection);
-  };
-  const handleOpenTable = async (table: Parameters<typeof openTable>[0]) => {
+  }, [openRedisDb]);
+  const handleOpenTable = useCallback(async (table: Parameters<typeof openTable>[0]) => {
     setShowSettings(false);
     await openTable(table);
-  };
+  }, [openTable]);
 
   return (
     <main
