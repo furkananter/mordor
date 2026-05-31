@@ -125,12 +125,23 @@ jobs:
           echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "Cut ${NEW_VERSION}"
 
-      # Push the bump commit and the tag. The tag push triggers release.yml,
-      # which runs the matrix build and publishes the GitHub Release.
+      # Push the bump commit and the tag. The tag push alone does NOT trigger
+      # release.yml — GitHub deliberately suppresses workflow runs for refs
+      # pushed with the default GITHUB_TOKEN to prevent recursion. So we
+      # dispatch release.yml explicitly in the next step.
       - name: Push commit and tag
         run: |
           git push origin HEAD:main
           git push origin "${{ steps.bump.outputs.version }}"
+
+      # Manually kick off release.yml against the freshly-pushed tag. Uses the
+      # same GITHUB_TOKEN — workflow_dispatch is allowed even when push-triggered
+      # workflows are suppressed.
+      - name: Dispatch release build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run release.yml --ref "${{ steps.bump.outputs.version }}"
 
       - name: Summary
         run: |
@@ -138,6 +149,6 @@ jobs:
             echo "### Release ${{ steps.bump.outputs.version }} cut :rocket:"
             echo ""
             echo "- Bump level: \`${{ steps.level.outputs.bump }}\`"
-            echo "- The \`${{ steps.bump.outputs.version }}\` tag was pushed; **release.yml** is building and publishing the cross-platform artifacts."
+            echo "- The \`${{ steps.bump.outputs.version }}\` tag was pushed and **release.yml** was dispatched to build and publish the cross-platform artifacts."
             echo "- Shipped apps will auto-update once the GitHub Release is live."
           } >> "$GITHUB_STEP_SUMMARY"
