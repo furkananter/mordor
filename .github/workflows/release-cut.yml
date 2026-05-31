@@ -1,0 +1,127 @@
+name: Release (cut version)
+
+# One-click release cutter. Trigger it from the GitHub UI:
+#   Actions → "Release (cut version)" → Run workflow.
+#
+# It inspects the Conventional Commit messages added since the last vX.Y.Z tag
+# and derives the semver bump automatically:
+#   - any `feat:` / `feat(scope):`            → minor
+#   - a `!` after type or a `BREAKING CHANGE` → major
+#   - otherwise (fix:, chore:, perf:, …)      → patch
+# Then it bumps package.json on main, commits, and pushes the matching
+# `vX.Y.Z` tag. Pushing the tag fires release.yml, which builds and publishes
+# the cross-platform artifacts; shipped apps auto-update via electron-updater.
+#
+# An optional `bump` input lets a maintainer override the derived level when a
+# release needs to be forced up (e.g. cutting a minor with only fix: commits).
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Override semver bump (leave "auto" to derive from commits)'
+        type: choice
+        required: true
+        default: auto
+        options:
+          - auto
+          - patch
+          - minor
+          - major
+
+# Need write access to push the bump commit + tag back to the repo.
+permissions:
+  contents: write
+
+# Never let two release-cutters race — a second run must wait, not interleave
+# version bumps.
+concurrency:
+  group: release-cut
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    name: Cut release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # Releases are only ever cut from main. Running this on another branch
+      # would tag the wrong tree, so fetch and pin main explicitly. Full
+      # history + tags so we can diff against the last release tag.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Derive the bump from Conventional Commits since the last vX.Y.Z tag.
+      # When the input is not "auto", honour the explicit override instead.
+      - name: Determine bump
+        id: level
+        run: |
+          set -euo pipefail
+          OVERRIDE="${{ inputs.bump }}"
+          if [ "$OVERRIDE" != "auto" ]; then
+            echo "bump=$OVERRIDE" >> "$GITHUB_OUTPUT"
+            echo "Using explicit override: $OVERRIDE"
+            exit 0
+          fi
+
+          LAST_TAG="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)"
+          if [ -z "$LAST_TAG" ]; then
+            RANGE=""
+            echo "No previous tag — inspecting full history."
+          else
+            RANGE="${LAST_TAG}..HEAD"
+            echo "Inspecting commits in ${RANGE}"
+          fi
+
+          LOG="$(git log --format='%B' ${RANGE})"
+
+          # major: a `!` before the colon (feat!:, fix(api)!:) or a BREAKING CHANGE footer.
+          if printf '%s' "$LOG" | grep -qE '^[a-zA-Z]+(\([^)]+\))?!:' \
+             || printf '%s' "$LOG" | grep -qE 'BREAKING[ -]CHANGE'; then
+            BUMP=major
+          # minor: any feat: / feat(scope): commit.
+          elif printf '%s' "$LOG" | grep -qE '^feat(\([^)]+\))?:'; then
+            BUMP=minor
+          else
+            BUMP=patch
+          fi
+          echo "Derived bump: $BUMP"
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+
+      # `npm version <bump>` updates package.json + package-lock.json, commits,
+      # and creates the annotated `vX.Y.Z` tag in one step.
+      - name: Bump version
+        id: bump
+        run: |
+          NEW_VERSION="$(npm version ${{ steps.level.outputs.bump }} -m "chore(release): %s")"
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Cut ${NEW_VERSION}"
+
+      # Push the bump commit and the tag. The tag push triggers release.yml,
+      # which runs the matrix build and publishes the GitHub Release.
+      - name: Push commit and tag
+        run: |
+          git push origin HEAD:main
+          git push origin "${{ steps.bump.outputs.version }}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Release ${{ steps.bump.outputs.version }} cut :rocket:"
+            echo ""
+            echo "- Bump level: \`${{ steps.level.outputs.bump }}\`"
+            echo "- The \`${{ steps.bump.outputs.version }}\` tag was pushed; **release.yml** is building and publishing the cross-platform artifacts."
+            echo "- Shipped apps will auto-update once the GitHub Release is live."
+          } >> "$GITHUB_STEP_SUMMARY"
