@@ -50,6 +50,7 @@ export function PostgresWorkspace({
   queryLoading,
   onQueryChange,
   onRun,
+  history = [],
 }: {
   profile: PostgresProfileListItem;
   queryText: string;
@@ -57,12 +58,43 @@ export function PostgresWorkspace({
   queryLoading: boolean;
   onQueryChange(value: string): void;
   onRun(): Promise<void>;
+  history?: string[];
 }) {
   const activeTab = useLayoutStore((state) => state.activeTab);
   const setActiveTab = useLayoutStore((state) => state.setActiveTab);
   // Fold non-pg tab keys (data, migrations) onto "cql" — they're irrelevant
   // here but the layout store persists them across profile switches.
   const tab: PostgresTab = activeTab === "schema" ? "schema" : "cql";
+
+  const [explainText, setExplainText] = useState<string | null>(null);
+  const [explaining, setExplaining] = useState(false);
+  const setError = useStatusStore((state) => state.setError);
+
+  const handleRun = async () => {
+    setExplainText(null);
+    await onRun();
+  };
+
+  const handleExplain = async () => {
+    if (!queryText.trim()) return;
+    setExplaining(true);
+    setExplainText(null);
+    try {
+      const result = await window.cassandraDesk.runSelectQuery(
+        profile.id,
+        `EXPLAIN (ANALYZE, BUFFERS) ${queryText.trim()}`,
+      );
+      // EXPLAIN FORMAT TEXT returns one row per output line in the QUERY PLAN column
+      const plan = result.rows
+        .map((row) => row["QUERY PLAN"] ?? "")
+        .join("\n");
+      setExplainText(plan);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setExplaining(false);
+    }
+  };
 
   return (
     <div className="grid min-h-0 flex-1 grid-cols-1">
@@ -85,11 +117,15 @@ export function PostgresWorkspace({
               queryResult={queryResult}
               loading={queryLoading}
               onChange={onQueryChange}
-              onRun={onRun}
+              onRun={handleRun}
               title="SQL Console"
               hideQueryMode
               dialect="postgres"
               placeholder={`-- Run SQL against ${profile.name} (${profile.database})\nSELECT table_schema, table_name FROM information_schema.tables ORDER BY table_schema, table_name LIMIT 100;`}
+              history={history}
+              onExplain={handleExplain}
+              explainResult={explainText}
+              explaining={explaining}
             />
           )}
         </div>
