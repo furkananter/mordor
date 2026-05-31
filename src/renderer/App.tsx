@@ -10,6 +10,7 @@ import { useAppShortcuts } from "./hooks/useAppShortcuts";
 import { useDragHandle } from "./hooks/useDragHandle";
 import { useFullscreen } from "./hooks/useFullscreen";
 import { useThemeSync } from "./hooks/useThemeSync";
+import { PerfZone } from "./lib/perf";
 import { useConnectionStore } from "./store/connection";
 import { useLayoutStore } from "./store/layout";
 import { usePreferencesStore } from "./store/preferences";
@@ -137,35 +138,37 @@ export function App() {
       data-fullscreen={fullscreen ? "true" : "false"}
       style={{ ["--sidebar-width" as string]: `${sidebarWidth}px` }}
     >
-      <Sidebar
-        profiles={profiles}
-        selectedTable={selectedTable}
-        selectedProfileId={selectedProfileId}
-        busy={busy}
-        collapsed={sidebarCollapsed}
-        showSettings={showSettings}
-        onDetectLocal={detectLocal}
-        onAddConnection={handleOpenAdd}
-        onEditConnection={handleEditProfile}
-        onDeleteConnection={deleteProfile}
-        onShowSettings={() => setShowSettings(true)}
-        onShowHome={handleShowHome}
-        onSelectProfile={handleSelectProfile}
-        selectedRedis={redisSelection}
-        onOpenRedisDb={handleOpenRedisDb}
-        onToggleCollapsed={toggleSidebar}
-        onResizeStart={sidebarDrag.onMouseDown}
-        resizing={sidebarDrag.resizing}
-        onConnect={connect}
-        onDisconnect={disconnect}
-        onOpenTable={handleOpenTable}
-      />
+      <PerfZone id="sidebar">
+        <Sidebar
+          profiles={profiles}
+          selectedTable={selectedTable}
+          selectedProfileId={selectedProfileId}
+          busy={busy}
+          collapsed={sidebarCollapsed}
+          showSettings={showSettings}
+          onDetectLocal={detectLocal}
+          onAddConnection={handleOpenAdd}
+          onEditConnection={handleEditProfile}
+          onDeleteConnection={deleteProfile}
+          onShowSettings={() => setShowSettings(true)}
+          onShowHome={handleShowHome}
+          onSelectProfile={handleSelectProfile}
+          selectedRedis={redisSelection}
+          onOpenRedisDb={handleOpenRedisDb}
+          onToggleCollapsed={toggleSidebar}
+          onResizeStart={sidebarDrag.onMouseDown}
+          resizing={sidebarDrag.resizing}
+          onConnect={connect}
+          onDisconnect={disconnect}
+          onOpenTable={handleOpenTable}
+        />
+      </PerfZone>
 
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden" aria-label="Workspace">
         <WorkspaceHeader showSettings={showSettings} />
 
-        {/* Update banner sits just under the title bar — only renders when there's
-            an actionable update state (available / downloaded / mac-unsupported). */}
+        {/* Update notice renders as a fixed toast (top-right) — no longer in
+            normal flow, so it doesn't reflow the workspace when it appears. */}
         <UpdateBanner />
 
         {error ? (
@@ -174,12 +177,14 @@ export function App() {
           </div>
         ) : null}
 
-        <WorkspaceRoutes
-          showSettings={showSettings}
-          onAddConnection={handleOpenAdd}
-          onEditConnection={handleEditProfile}
-          onOpenTable={handleOpenTable}
-        />
+        <PerfZone id="workspace">
+          <WorkspaceRoutes
+            showSettings={showSettings}
+            onAddConnection={handleOpenAdd}
+            onEditConnection={handleEditProfile}
+            onOpenTable={handleOpenTable}
+          />
+        </PerfZone>
 
         <TerminalDrawer />
       </section>

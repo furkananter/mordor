@@ -13,6 +13,13 @@ interface MigrationsState {
   migrationsList: MigrationListPayload | undefined;
   migrationsState: LoadState;
   migrationsLog: string[];
+  /**
+   * Profile the cached `migrationsList` belongs to. The store holds a single
+   * list at a time, so without this the page would show the previously-viewed
+   * connection's migrations for a beat after switching profiles. Consumers must
+   * ignore `migrationsList` whenever this doesn't match the active profile.
+   */
+  migrationsProfileId: string | undefined;
 }
 
 interface MigrationsActions {
@@ -36,12 +43,14 @@ export const useMigrationsStore = create<MigrationsState & MigrationsActions>()(
       migrationsList: undefined,
       migrationsState: "idle",
       migrationsLog: [],
+      migrationsProfileId: undefined,
 
       setMigrationsEnabled: (enabled) =>
         set({
           migrationsEnabled: enabled,
           migrationsList: undefined,
           migrationsLog: [],
+          migrationsProfileId: undefined,
         }),
 
       updateProfileMigrations: async (profileId, folder, keyspace) => {
@@ -63,7 +72,7 @@ export const useMigrationsStore = create<MigrationsState & MigrationsActions>()(
             migrationsFolder: folder,
             migrationsKeyspace: keyspace,
           });
-          set({ migrationsList: undefined });
+          set({ migrationsList: undefined, migrationsProfileId: undefined });
         });
       },
 
@@ -72,13 +81,13 @@ export const useMigrationsStore = create<MigrationsState & MigrationsActions>()(
           .getState()
           .profiles.find((entry) => entry.id === profileId);
         if (profile && profile.type !== "cassandra") {
-          set({ migrationsList: undefined });
+          set({ migrationsList: undefined, migrationsProfileId: undefined });
           return;
         }
         const folder = profile?.migrationsFolder;
         const keyspace = profile?.migrationsKeyspace;
         if (!profile || !folder || !keyspace || !profile.connected) {
-          set({ migrationsList: undefined });
+          set({ migrationsList: undefined, migrationsProfileId: undefined });
           return;
         }
         set({ migrationsState: "loading" });
@@ -89,7 +98,7 @@ export const useMigrationsStore = create<MigrationsState & MigrationsActions>()(
               keyspace,
               folder,
             );
-            set({ migrationsList: payload, migrationsState: "loaded" });
+            set({ migrationsList: payload, migrationsState: "loaded", migrationsProfileId: profileId });
           } catch (caught) {
             set({ migrationsState: "idle" });
             throw caught;
@@ -118,7 +127,7 @@ export const useMigrationsStore = create<MigrationsState & MigrationsActions>()(
             keyspace,
             folder,
           );
-          set({ migrationsList: payload });
+          set({ migrationsList: payload, migrationsProfileId: profileId });
           // The migration may have created/dropped tables — refresh the cluster
           // schema so the sidebar tree reflects the new shape immediately.
           if (result?.statementsExecuted && result.statementsExecuted > 0) {

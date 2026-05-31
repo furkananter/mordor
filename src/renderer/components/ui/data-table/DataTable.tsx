@@ -87,7 +87,12 @@ function DataTableImpl({
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    columnResizeMode: "onChange",
+    // Resize on mouse-release rather than per-mousemove. In "onChange" mode
+    // every drag tick rewrites column sizing state, which re-runs the row model
+    // and re-renders every visible cell — the dominant source of jank when
+    // dragging a column on a wide/tall result. "onEnd" keeps the drag itself
+    // smooth and commits the new width once, on release.
+    columnResizeMode: "onEnd",
     defaultColumn: { size: 220, minSize: 80, maxSize: 800 },
     initialState: { pagination: { pageSize: effectivePageSize } },
     ...(rowIdColumns && rowIdColumns.length > 0

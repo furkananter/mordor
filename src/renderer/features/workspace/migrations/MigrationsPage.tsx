@@ -3,6 +3,7 @@ import { EmptyState } from "../../../components/ui/EmptyState";
 import { CassandraProfileListItem } from "../../../../core/ipc";
 import { useConnectionStore } from "../../../store/connection";
 import { useMigrationsStore } from "../../../store/migrations";
+import { useStatusStore } from "../../../store/status";
 import { MigrationApplyDialog, PendingApply } from "./MigrationApplyDialog";
 import { NewMigrationDialog } from "./NewMigrationDialog";
 import { ProfileMigrations } from "./ProfileMigrations";
@@ -17,8 +18,9 @@ export function MigrationsPage({
   embedded?: boolean;
 } = {}) {
   const profiles = useConnectionStore((state) => state.profiles);
-  const migrationsList = useMigrationsStore((state) => state.migrationsList);
-  const migrationsState = useMigrationsStore((state) => state.migrationsState);
+  const migrationsListRaw = useMigrationsStore((state) => state.migrationsList);
+  const migrationsStateRaw = useMigrationsStore((state) => state.migrationsState);
+  const migrationsProfileId = useMigrationsStore((state) => state.migrationsProfileId);
   const loadMigrations = useMigrationsStore((state) => state.loadMigrations);
   const applyMigration = useMigrationsStore((state) => state.applyMigration);
   const updateProfileMigrations = useMigrationsStore((state) => state.updateProfileMigrations);
@@ -66,6 +68,14 @@ export function MigrationsPage({
   const [newMigrationName, setNewMigrationName] = useState("");
   const [newMigrationError, setNewMigrationError] = useState<string | undefined>(undefined);
 
+  // Switching the active connection must not carry over a half-finished
+  // confirm/edit flow from the previous one — drop that transient UI state.
+  useEffect(() => {
+    setConfirming(undefined);
+    setEditing(false);
+    setNewMigrationOpen(false);
+  }, [profileId]);
+
   if (cassandraProfiles.length === 0) {
     return (
       <section className="flex min-h-0 flex-1 flex-col bg-panel">
@@ -73,6 +83,17 @@ export function MigrationsPage({
       </section>
     );
   }
+
+  // The store keeps a single migrations list; only trust it when it belongs to
+  // the connection currently in view, otherwise we'd flash the previously
+  // selected profile's files while the new one is still loading.
+  const listMatchesProfile = migrationsProfileId !== undefined && migrationsProfileId === profileId;
+  const migrationsList = listMatchesProfile ? migrationsListRaw : undefined;
+  const migrationsState = listMatchesProfile
+    ? migrationsStateRaw
+    : profile?.connected && profile.migrationsFolder && profile.migrationsKeyspace
+      ? "loading"
+      : "idle";
 
   const unconfiguredCount = cassandraProfiles.length - configuredProfiles.length;
   const pendingCount = migrationsList?.files.filter((file) => file.status === "pending").length ?? 0;
@@ -104,7 +125,13 @@ export function MigrationsPage({
     try {
       for (const version of confirming.versions) {
         const result = await applyMigration(profileId, version);
-        if (result?.error) break;
+        if (result?.error) {
+          // Migration failures come back as a result payload rather than a
+          // thrown error, so runWithStatus never surfaces them — raise it here
+          // so the user actually sees why the batch stopped.
+          useStatusStore.getState().setError(`Migration ${version} failed: ${result.error}`);
+          break;
+        }
       }
     } finally {
       setApplying(false);
@@ -153,6 +180,7 @@ export function MigrationsPage({
 
       {profile ? (
         <ProfileMigrations
+          key={profile.id}
           profile={profile}
           editing={editing}
           onEdit={() => setEditing(true)}
