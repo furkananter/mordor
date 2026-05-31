@@ -77,10 +77,12 @@ jobs:
         run: npm run build
 
       # The actual release. `electron-builder --publish always` uploads the
-      # artifacts to a draft GitHub Release matching the current version (it
-      # creates the release on the first matrix job, the others append to it).
-      # No PAT needed — GITHUB_TOKEN is repo-scoped and has `contents: write`
-      # via the job-level `permissions` block above.
+      # artifacts to a GitHub Release matching the current version (it creates
+      # the release on the first matrix job, the others append to it). The
+      # `releaseType: release` in package.json's publish config means it's
+      # published immediately rather than left as a draft, so electron-updater
+      # clients actually see it. No PAT needed — GITHUB_TOKEN is repo-scoped and
+      # has `contents: write` via the job-level `permissions` block above.
       - name: Package & publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
