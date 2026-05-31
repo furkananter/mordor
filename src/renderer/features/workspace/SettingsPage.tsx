@@ -207,7 +207,10 @@ function UpdatesPanel() {
   const [checking, setChecking] = useState(false);
 
   const isBusy = status.kind === "checking" || status.kind === "downloading" || checking;
-  const canCheck = status.kind !== "unsupported";
+  // `releasesUrl` flags a "manual download" platform (mac ad-hoc) where
+  // electron-updater can't apply the bits — show the GitHub link instead of
+  // a re-check button so the user has a way forward.
+  const canCheck = !status.releasesUrl;
 
   const handleCheck = async () => {
     setChecking(true);
@@ -254,7 +257,9 @@ function statusLine(status: UpdateStatus): string {
     case "checking":
       return "Checking for updates…";
     case "available":
-      return `Mordor ${status.version ?? ""} available — downloading…`;
+      return status.releasesUrl
+        ? `Mordor ${status.version ?? ""} available — download from GitHub Releases`
+        : `Mordor ${status.version ?? ""} available — downloading…`;
     case "downloading":
       return `Downloading${status.progress ? ` · ${status.progress.percent}%` : "…"}`;
     case "downloaded":
@@ -270,7 +275,7 @@ function statusLine(status: UpdateStatus): string {
 }
 
 function detailLine(status: UpdateStatus): string {
-  if (status.kind === "unsupported") {
+  if (status.releasesUrl) {
     return "This build isn't signed with a Developer ID; download new releases from GitHub.";
   }
   if (!status.lastCheckedAt) return "Mordor will check automatically a few seconds after launch.";

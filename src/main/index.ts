@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, nativeImage } from "electron";
+import { app, BrowserWindow, Menu, nativeImage, nativeTheme } from "electron";
 import { join } from "node:path";
 
 // Ubuntu 24.04+ / Debian Trixie enforce an AppArmor profile that blocks
@@ -38,6 +38,15 @@ function resolveIcon(): Electron.NativeImage | undefined {
 
 async function createWindow(): Promise<BrowserWindow> {
   const icon = resolveIcon();
+  // Pick the pre-paint background based on the OS theme. The renderer reads
+  // the user's pinned preference from localStorage in an inline <script> and
+  // sets `data-theme` before React mounts; here we only need a sensible
+  // default for the window before the renderer process loads. For users on
+  // "auto" this is exactly right; users who've pinned the opposite of their
+  // OS see a brief flash but never a white flash.
+  const dark = nativeTheme.shouldUseDarkColors;
+  const bg = dark ? "#1a1816" : "#faf8f3";
+  const sym = dark ? "#ece8e0" : "#2a2724";
   const window = new BrowserWindow({
     width: 1240,
     height: 820,
@@ -45,13 +54,11 @@ async function createWindow(): Promise<BrowserWindow> {
     minHeight: 620,
     title: "Mordor",
     ...(icon ? { icon } : {}),
-    // Matches the renderer's --bg so the brief pre-mount gap before React
-    // paints is the same cream, not a white flash.
-    backgroundColor: "#faf8f3",
+    backgroundColor: bg,
     titleBarOverlay: {
-      color: "#faf8f3",
+      color: bg,
       height: 42,
-      symbolColor: "#2a2724",
+      symbolColor: sym,
     },
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 14 },
