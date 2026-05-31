@@ -7,6 +7,11 @@ import { useLayoutStore } from "./layout";
 import { useQueryStore } from "./query";
 import { useRecentTablesStore } from "./recentTables";
 
+// Hard ceiling for the "Load all" sweep. Past this, materializing every row in
+// the renderer is the wrong tool — TRUNCATE / a targeted DELETE is. We stop and
+// tell the user rather than risk an out-of-memory tab on a multi-million-row table.
+const LOAD_ALL_ROW_CEILING = 50_000;
+
 interface SchemaState {
   selectedTable: TableIdentity | undefined;
   selectedProfileId: string | undefined;
@@ -15,6 +20,8 @@ interface SchemaState {
   tableState: LoadState;
   /** True while a load-more (next page) fetch is in flight. */
   previewLoadingMore: boolean;
+  /** True while a "load every remaining page" sweep is in flight. */
+  previewLoadingAll: boolean;
 }
 
 interface SchemaActions {
@@ -23,6 +30,7 @@ interface SchemaActions {
   reloadSelectedTable(): Promise<void>;
   refreshPreviewSilent(): Promise<void>;
   loadMorePreview(): Promise<void>;
+  loadAllPreview(): Promise<void>;
   clearTable(): void;
 }
 
@@ -33,6 +41,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
   preview: undefined,
   tableState: "idle",
   previewLoadingMore: false,
+  previewLoadingAll: false,
 
   openTable: async (table) => {
     set({
@@ -100,6 +109,52 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       useStatusStore.getState().setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       set({ previewLoadingMore: false });
+    }
+  },
+
+  loadAllPreview: async () => {
+    const selected = get().selectedTable;
+    if (!selected || !get().preview?.pageState) return;
+    if (get().previewLoadingAll || get().previewLoadingMore) return;
+    set({ previewLoadingAll: true });
+    const sameTable = (other: TableIdentity | undefined): boolean =>
+      !!other &&
+      other.profileId === selected.profileId &&
+      other.keyspace === selected.keyspace &&
+      other.table === selected.table;
+    try {
+      // Walk the continuation token until the server stops handing one back.
+      // Commit each page as it lands so the row count climbs visibly and the
+      // user can bail mid-sweep by switching tables. The page cap is a backstop
+      // against a driver that returns a token forever on empty pages.
+      for (let page = 0; page < 10_000; page += 1) {
+        const current = get().preview;
+        const pageState = current?.pageState;
+        if (!current || !pageState) break;
+        if (current.rows.length >= LOAD_ALL_ROW_CEILING) {
+          useStatusStore
+            .getState()
+            .setError(
+              `Stopped after ${current.rows.length} rows — that's the load-all ceiling. For larger tables use TRUNCATE or a targeted DELETE instead.`,
+            );
+          break;
+        }
+        const next = await window.cassandraDesk.getPreview(selected, pageState);
+        if (!sameTable(get().selectedTable)) return;
+        const previous = get().preview;
+        if (!previous) return;
+        const merged: PreviewRowsPayload = {
+          columns: previous.columns,
+          rows: [...previous.rows, ...next.rows],
+          limit: previous.limit,
+        };
+        if (next.pageState) merged.pageState = next.pageState;
+        set({ preview: merged });
+      }
+    } catch (caught) {
+      useStatusStore.getState().setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      set({ previewLoadingAll: false });
     }
   },
 

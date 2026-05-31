@@ -114,6 +114,14 @@ export function DataTableToolbar({
             <span className="ml-1 rounded-full bg-accent-soft px-2 py-0.5 text-[11px] font-medium text-accent">
               {selectedCount} selected
             </span>
+            {selectedCount < filteredCount ? (
+              <Button
+                onClick={() => table.toggleAllRowsSelected(true)}
+                tooltip="Select every loaded row across all pages"
+              >
+                Select all {filteredCount}
+              </Button>
+            ) : null}
             {onClearSelection ? (
               <Button onClick={onClearSelection} tooltip="Clear selection">
                 Clear

@@ -2,7 +2,7 @@
   "name": "mordor",
   "productName": "Mordor",
   "description": "Multi-database desktop workbench (Cassandra, PostgreSQL, Redis).",
-  "version": "1.0.0",
+  "version": "0.3.0",
   "author": "Furkan",
   "license": "MIT",
   "repository": {

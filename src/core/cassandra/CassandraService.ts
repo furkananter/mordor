@@ -368,7 +368,13 @@ export class CassandraService {
       query: cql,
       params: keyColumns.map((column) => coerceForCassandra(row[column] ?? "", typeByColumn.get(column) ?? "text")),
     }));
-    await existing.client.batch(queries, { prepare: true, logged: true });
+    // Chunk the deletes: a single logged batch with thousands of statements
+    // trips Cassandra's batch_size_fail_threshold and times out. "Load all"
+    // makes large selections easy, so keep each batch well under the limit.
+    const BATCH_CHUNK = 100;
+    for (let i = 0; i < queries.length; i += BATCH_CHUNK) {
+      await existing.client.batch(queries.slice(i, i + BATCH_CHUNK), { prepare: true, logged: true });
+    }
     return { deleted: rows.length };
   }
 
