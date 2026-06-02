@@ -1,4 +1,4 @@
-import { ReactNode, useMemo, useState } from "react";
+import { memo, ReactNode, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -56,7 +56,12 @@ type ActionEntry =
       variant?: "destructive";
     };
 
-export function ConnectionNode({
+// Memoized: a single connection row (plus its Radix menus, AlertDialog, and
+// keyspace/table children) should only re-render when its own props change —
+// not on every App-level `busy`/selection churn. Props from App are stable
+// (useCallback'd handlers + store actions); `profile` keeps its reference
+// across unrelated updates.
+export const ConnectionNode = memo(function ConnectionNode({
   profile,
   selectedTable,
   selectedProfileId,
@@ -283,4 +288,4 @@ export function ConnectionNode({
       ) : null}
     </li>
   );
-}
+});

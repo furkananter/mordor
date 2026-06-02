@@ -33,6 +33,16 @@ export function CqlEditor({
 }) {
   const ref = useRef<ReactCodeMirrorRef>(null);
 
+  // Keep onRun in a ref so the Mod-Enter keymap always invokes the latest
+  // callback WITHOUT listing onRun in the extensions deps. Call sites pass a
+  // fresh `() => void onRun()` on every render; if that fed the memo, the whole
+  // extension pipeline (SQL dialect parser, the 120+ entry autocomplete list,
+  // syntax highlighting, theme) would be rebuilt and a full
+  // StateEffect.reconfigure dispatched into the live editor on EVERY keystroke.
+  // With the ref, extensions only rebuild when completions/dialect change.
+  const onRunRef = useRef(onRun);
+  onRunRef.current = onRun;
+
   const extensions = useMemo(
     () => [
       // PostgresWorkspace passes dialect="postgres" so SQL keywords (RETURNING,
@@ -50,7 +60,7 @@ export function CqlEditor({
           {
             key: "Mod-Enter",
             run: () => {
-              onRun();
+              onRunRef.current();
               return true;
             }
           }
@@ -58,7 +68,7 @@ export function CqlEditor({
       ),
       EditorView.lineWrapping
     ],
-    [completions, onRun, dialect]
+    [completions, dialect]
   );
 
   return (
