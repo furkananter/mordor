@@ -64,17 +64,24 @@ const config = {
   mac: {
     icon: "media/macos/AppIcon.icns",
     target: ["dmg", "zip"],
-    // With a real certificate, leave `identity` unset so electron-builder
-    // auto-selects the Developer ID Application identity it imported from
-    // CSC_LINK. Without one, force ad-hoc (`-`) so the app still launches.
-    ...(signMac ? {} : { identity: "-" }),
-    // Hardened runtime is mandatory for notarization; only enable it when we're
-    // actually signing (an ad-hoc build with hardened runtime fails to launch).
-    hardenedRuntime: signMac,
     gatekeeperAssess: false,
-    entitlements: "build/entitlements.mac.plist",
-    entitlementsInherit: "build/entitlements.mac.plist",
-    notarize: notarizeMac,
+    ...(signMac
+      ? {
+          // Real Developer ID certificate (CSC_LINK present): leave `identity`
+          // unset so electron-builder auto-selects the Developer ID Application
+          // identity it imported from CSC_LINK. Hardened runtime + entitlements
+          // are mandatory for notarization.
+          hardenedRuntime: true,
+          entitlements: "build/entitlements.mac.plist",
+          entitlementsInherit: "build/entitlements.mac.plist",
+          notarize: notarizeMac,
+        }
+      : {
+          // No certificate: ad-hoc sign (`-`) so the app still launches —
+          // identical to the pre-signing config. No hardened runtime,
+          // entitlements, or notarization, all of which need a real identity.
+          identity: "-",
+        }),
   },
   win: {
     icon: "media/macos/AppIcon512.png",
