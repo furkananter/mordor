@@ -1,10 +1,15 @@
+import { memo } from "react";
 import { ProfileListItem } from "../../../core/ipc";
 import { TableIdentity } from "../../../core/shared/messages";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { RedisSelection } from "../../store/redis";
 import { ConnectionNode } from "./ConnectionNode";
 
-export function ConnectionTree({
+// Memoized so the always-mounted tree doesn't re-render on every unrelated App
+// state change. None of these props change on a `busy` flip (a different
+// store), so a connect/disconnect/query no longer re-renders the whole tree —
+// previously the dominant sidebar cost. Selection changes still flow through.
+export const ConnectionTree = memo(function ConnectionTree({
   profiles,
   selectedTable,
   selectedProfileId,
@@ -55,4 +60,4 @@ export function ConnectionTree({
       </ul>
     </div>
   );
-}
+});

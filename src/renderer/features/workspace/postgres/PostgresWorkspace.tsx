@@ -15,6 +15,7 @@ import {
 import { Button } from "../../../components/ui/Button";
 import { PanelHeader } from "../../../components/ui/PanelHeader";
 import { SegmentedControl, SegmentedOption } from "../../../components/ui/SegmentedControl";
+import { TabPanel } from "../../../components/ui/TabPanel";
 import { useConnectionStore } from "../../../store/connection";
 import { useLayoutStore } from "../../../store/layout";
 import { useStatusStore } from "../../../store/status";
@@ -108,27 +109,26 @@ export function PostgresWorkspace({
             options={TAB_OPTIONS}
           />
         </div>
-        <div key={tab} className="anim-fade-slide-up flex min-h-0 flex-1 flex-col">
-          {tab === "schema" ? (
-            <PostgresSchemaPanel profile={profile} />
-          ) : (
-            <CqlPanel
-              queryText={queryText}
-              queryResult={queryResult}
-              loading={queryLoading}
-              onChange={onQueryChange}
-              onRun={handleRun}
-              title="SQL Console"
-              hideQueryMode
-              dialect="postgres"
-              placeholder={`-- Run SQL against ${profile.name} (${profile.database})\nSELECT table_schema, table_name FROM information_schema.tables ORDER BY table_schema, table_name LIMIT 100;`}
-              history={history}
-              onExplain={handleExplain}
-              explainResult={explainText}
-              explaining={explaining}
-            />
-          )}
-        </div>
+        <TabPanel active={tab === "cql"}>
+          <CqlPanel
+            queryText={queryText}
+            queryResult={queryResult}
+            loading={queryLoading}
+            onChange={onQueryChange}
+            onRun={handleRun}
+            title="SQL Console"
+            hideQueryMode
+            dialect="postgres"
+            placeholder={`-- Run SQL against ${profile.name} (${profile.database})\nSELECT table_schema, table_name FROM information_schema.tables ORDER BY table_schema, table_name LIMIT 100;`}
+            history={history}
+            onExplain={handleExplain}
+            explainResult={explainText}
+            explaining={explaining}
+          />
+        </TabPanel>
+        <TabPanel active={tab === "schema"}>
+          <PostgresSchemaPanel profile={profile} />
+        </TabPanel>
       </section>
     </div>
   );

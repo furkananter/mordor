@@ -16,6 +16,14 @@ const shared = {
   // `{"buffer":"0x..."}`). The bundle size cost is < 2 KB.
   keepNames: !isWatchMode,
   external: ["electron", "keytar", "node-pty"],
+  // Bake whether this build is Developer-ID signed into the main bundle. CI's
+  // release job exposes CSC_LINK (the signing cert) to this build step, so its
+  // presence is a reliable signal that electron-builder will sign + notarize.
+  // The macOS updater reads this to pick the seamless Squirrel flow vs. the
+  // ad-hoc DMG-download fallback. Empty/unset (local dev, unsigned CI) => false.
+  define: {
+    __MAC_SIGNED__: JSON.stringify(Boolean(process.env.CSC_LINK)),
+  },
   logLevel: "info"
 };
 

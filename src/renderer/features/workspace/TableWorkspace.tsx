@@ -8,6 +8,7 @@ import { DataPanel } from "./DataPanel";
 import { SchemaInspector } from "./SchemaInspector";
 import { SchemaTab } from "./SchemaTab";
 import { WorkspaceTabs } from "./WorkspaceTabs";
+import { TabPanel } from "../../components/ui/TabPanel";
 
 /**
  * Workspace shown when a specific table is selected. Renders the table-level
@@ -53,26 +54,23 @@ export function TableWorkspace() {
     >
       <section className="flex min-h-0 min-w-0 flex-col overflow-hidden bg-panel">
         <WorkspaceTabs activeTab={tab} onChange={setActiveTab} />
-        <div
-          key={tab}
-          className="anim-fade-slide-up flex min-h-0 flex-1 flex-col"
-        >
-          {tab === "schema" ? (
-            <SchemaTab schema={schema} />
-          ) : tab === "cql" ? (
-            <CqlPanel
-              queryText={queryText}
-              queryResult={queryResult}
-              loading={queryState === "loading"}
-              schema={schema}
-              onChange={setQueryText}
-              onRun={runQuery}
-              placeholder={defaultQueryForTable(selectedTable)}
-            />
-          ) : (
-            <DataPanel preview={preview} schema={schema} loading={tableState === "loading"} />
-          )}
-        </div>
+        <TabPanel active={tab === "data"}>
+          <DataPanel preview={preview} schema={schema} loading={tableState === "loading"} />
+        </TabPanel>
+        <TabPanel active={tab === "schema"}>
+          <SchemaTab schema={schema} />
+        </TabPanel>
+        <TabPanel active={tab === "cql"}>
+          <CqlPanel
+            queryText={queryText}
+            queryResult={queryResult}
+            loading={queryState === "loading"}
+            schema={schema}
+            onChange={setQueryText}
+            onRun={runQuery}
+            placeholder={defaultQueryForTable(selectedTable)}
+          />
+        </TabPanel>
       </section>
       {showInspector ? (
         <div className="max-[980px]:max-h-[220px]">

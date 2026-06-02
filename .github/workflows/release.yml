@@ -37,6 +37,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
+    # macOS code signing + notarization credentials, scoped to the mac job via
+    # the matrix guard so the Developer ID .p12 in CSC_LINK never reaches the
+    # Windows/Linux runners (electron-builder would otherwise try to sign those
+    # with it and fail). Set at the job level — not just on the publish step — so
+    # the "Build app bundle" step sees CSC_LINK too and bakes the matching
+    # `__MAC_SIGNED__` flag into the bundle. When the secrets aren't configured
+    # yet these resolve to empty strings and electron-builder produces the same
+    # ad-hoc build as before.
+    env:
+      CSC_LINK: ${{ matrix.os == 'macos-latest' && secrets.MAC_CSC_LINK || '' }}
+      CSC_KEY_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+      APPLE_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_ID || '' }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+      APPLE_TEAM_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
+
     steps:
       - uses: actions/checkout@v4
 

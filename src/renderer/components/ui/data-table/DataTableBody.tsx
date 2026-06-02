@@ -1,7 +1,7 @@
 import { Table, flexRender } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
-import { useRef } from "react";
+import { memo, useRef } from "react";
 import {
   Table as UiTable,
   TableBody,
@@ -150,15 +150,10 @@ export function DataTableBody({
                 <RenderedRow
                   key={virtualRow.key}
                   row={row}
+                  isSelected={row.getIsSelected()}
                   isFresh={highlightRowIds?.has(row.id) ?? false}
-                  // Absolute positioning anchored to the body's relative
-                  // container; transform avoids layout thrash compared to top.
-                  style={{
-                    display: "flex",
-                    position: "absolute",
-                    transform: `translateY(${virtualRow.start}px)`,
-                    width: "100%"
-                  }}
+                  offsetY={virtualRow.start}
+                  tableWidth={tableWidth}
                 />
               );
             })
@@ -167,8 +162,9 @@ export function DataTableBody({
               <RenderedRow
                 key={row.id}
                 row={row}
+                isSelected={row.getIsSelected()}
                 isFresh={highlightRowIds?.has(row.id) ?? false}
-                style={{ display: "flex", width: "100%" }}
+                tableWidth={tableWidth}
               />
             ))
           )}
@@ -178,18 +174,43 @@ export function DataTableBody({
   );
 }
 
-function RenderedRow({
+// Memoized so a state change that touches only one row (selecting a checkbox,
+// a fresh-row highlight flipping on/off during live polling) re-renders just
+// that row instead of every row in the visible window. The bits that actually
+// vary are passed as primitive props the default shallow compare can diff:
+//   - isSelected / isFresh  → toggle re-renders only the affected row
+//   - offsetY               → virtual scroll position (undefined = direct render)
+//   - tableWidth            → changes on column resize, so cell widths refresh
+// The TanStack `row` reference is stable across selection/scroll/live ticks
+// (the core row model is only rebuilt on sort/filter/data change), so the memo
+// holds for everything except genuine content changes.
+const RenderedRow = memo(function RenderedRow({
   row,
+  isSelected,
   isFresh,
-  style
+  offsetY,
+  tableWidth
 }: {
   row: import("@tanstack/react-table").Row<Row>;
+  isSelected: boolean;
   isFresh: boolean;
-  style: React.CSSProperties;
+  offsetY?: number;
+  tableWidth: number;
 }) {
+  const style: React.CSSProperties =
+    offsetY === undefined
+      ? { display: "flex", width: tableWidth }
+      : {
+          // Absolute positioning anchored to the body's relative container;
+          // transform avoids layout thrash compared to top.
+          display: "flex",
+          position: "absolute",
+          transform: `translateY(${offsetY}px)`,
+          width: tableWidth
+        };
   return (
     <TableRow
-      data-state={row.getIsSelected() ? "selected" : undefined}
+      data-state={isSelected ? "selected" : undefined}
       // Fresh-row highlight is driven entirely by the `[data-fresh="true"]`
       // CSS keyframe in styles.css — no per-row transition listener.
       data-fresh={isFresh ? "true" : undefined}
@@ -205,7 +226,7 @@ function RenderedRow({
             >
               <div className="flex h-full items-center justify-start pl-3">
                 <SelectionCheckbox
-                  checked={row.getIsSelected()}
+                  checked={isSelected}
                   onChange={(value) => row.toggleSelected(value)}
                   ariaLabel="Select row"
                 />
@@ -225,7 +246,7 @@ function RenderedRow({
       })}
     </TableRow>
   );
-}
+});
 
 function SelectionCheckbox({
   checked,

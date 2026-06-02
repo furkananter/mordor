@@ -16,9 +16,20 @@ export function Tooltip({
   const anchorRef = useRef<HTMLSpanElement>(null);
   const tooltipRef = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(false);
-
-  const rect = anchorRef.current?.getBoundingClientRect();
+  // Measure the anchor only when the tooltip actually opens, NOT on every
+  // render. Reading getBoundingClientRect() in the render body forced a
+  // synchronous reflow for every tooltip-wrapped button on each re-render —
+  // and these wrap most of the always-mounted chrome, so a single state change
+  // could trigger a dozen+ layout reads. Now the reflow happens once, on
+  // hover/focus, for the one tooltip being shown.
+  const [rect, setRect] = useState<DOMRect | undefined>(undefined);
   const position = rect ? getTooltipPosition(rect, placement) : undefined;
+
+  const show = () => {
+    if (anchorRef.current) setRect(anchorRef.current.getBoundingClientRect());
+    setVisible(true);
+  };
+  const hide = () => setVisible(false);
 
   useLayoutEffect(() => {
     if (!visible || !tooltipRef.current) return;
@@ -41,13 +52,13 @@ export function Tooltip({
       ref={anchorRef}
       aria-describedby={visible ? id : undefined}
       className="relative inline-flex"
-      onBlur={() => setVisible(false)}
-      onFocus={() => setVisible(true)}
-      onMouseEnter={() => setVisible(true)}
-      onMouseLeave={() => setVisible(false)}
+      onBlur={hide}
+      onFocus={show}
+      onMouseEnter={show}
+      onMouseLeave={hide}
     >
       {children}
-      {visible && rect
+      {visible && position
         ? createPortal(
             <span
               ref={tooltipRef}
