@@ -65,34 +65,36 @@ export const POSTGRES_PREVIEW_LIMIT = 100;
 const SYSTEM_SCHEMAS = new Set(["pg_catalog", "information_schema", "pg_toast"]);
 
 /**
- * Extension-internal schemas we hide from the sidebar tree by default. These
- * are bookkeeping schemas owned by Postgres extensions (TimescaleDB chunks,
- * Supabase auth/realtime/storage, pg_partman) — the user typically only cares
+ * Schema prefixes we hide from the sidebar tree by default. These are
+ * bookkeeping schemas owned by Postgres extensions (TimescaleDB chunks,
+ * Supabase realtime/storage/auth, pg_partman) — the user typically only cares
  * about their own application schemas. Including them tanks the renderer:
  * a busy TimescaleDB instance can have thousands of `_hyper_*_*_chunk` tables
  * in `_timescaledb_internal`, and rendering every node turns every click into
  * a re-layout pass against a giant tree.
- *
- * Wildcards (LIKE patterns) are interpolated into the schema-listing query so
- * the database — not the renderer — drops them first.
  */
-const EXTENSION_INTERNAL_SCHEMA_PATTERNS = [
-  // TimescaleDB
-  "\\_timescaledb\\_%",
-  // Supabase / pg_graphql / pg_net / pg_cron
-  "\\_realtime",
-  "\\_analytics",
+const HIDDEN_SCHEMA_PREFIXES = [
+  // TimescaleDB owns everything under `_timescaledb_*` (catalog, internal,
+  // config, cache, functions). Matched as a prefix so future TimescaleDB
+  // versions adding new internal schemas keep getting filtered.
+  "_timescaledb_",
+];
+
+const HIDDEN_SCHEMA_NAMES = new Set([
+  // Supabase / pg_graphql / pg_net / pg_cron internals.
+  "_realtime",
+  "_analytics",
   "pgsodium",
-  "pgsodium\\_masks",
-  "supabase\\_functions",
-  "supabase\\_migrations",
+  "pgsodium_masks",
+  "supabase_functions",
+  "supabase_migrations",
   "graphql",
-  "graphql\\_public",
+  "graphql_public",
   "net",
   "vault",
-  // pg_partman bookkeeping
+  // pg_partman bookkeeping.
   "partman",
-];
+]);
 
 export class PostgresService {
   private readonly connections = new Map<string, ActiveConnection>();
@@ -419,18 +421,17 @@ export class PostgresService {
   }
 
   private async fetchSchema(client: pg.Client): Promise<PostgresSchemaNode[]> {
-    // Build the NOT LIKE clause for extension-internal schemas. Doing the
-    // filter in SQL means TimescaleDB's thousands of `_hyper_*_*_chunk` rows
-    // never cross the wire, so a busy hypertable doesn't tarpit the renderer.
-    const extensionPatterns = EXTENSION_INTERNAL_SCHEMA_PATTERNS.map(
-      (_pat, idx) => `nspname NOT LIKE $${idx + 1} ESCAPE '\\'`
-    ).join(" AND ");
-    const params = EXTENSION_INTERNAL_SCHEMA_PATTERNS;
-
     // Two queries: one for user schemas (so empty ones like a fresh `public`
     // still show in the sidebar), one for the actual tables/views. Listing the
     // namespaces separately means the user sees "this DB has nothing yet"
     // instead of an empty sidebar that looks broken.
+    //
+    // Postgres-side filter only removes the `pg_*` and `information_schema`
+    // built-ins. The extension-internal hide list is applied client-side via
+    // `isHiddenSchemaName` — the earlier LIKE/ESCAPE approach worked on most
+    // installs but had a known footgun on Postgres builds with
+    // `standard_conforming_strings=off` (the backslash escape silently no-ops
+    // and the filter does nothing). A plain JS prefix check has no such trap.
     const [namespacesResult, objectsResult] = await Promise.all([
       client.query<{ schema_name: string }>(
         `SELECT nspname AS schema_name
@@ -438,9 +439,7 @@ export class PostgresService {
          WHERE nspname NOT IN ('pg_catalog','information_schema','pg_toast')
            AND nspname NOT LIKE 'pg_temp_%'
            AND nspname NOT LIKE 'pg_toast_temp_%'
-           AND ${extensionPatterns}
          ORDER BY nspname`,
-        params,
       ),
       client.query<{
         schema_name: string;
@@ -457,19 +456,19 @@ export class PostgresService {
            AND n.nspname NOT IN ('pg_catalog','information_schema','pg_toast')
            AND n.nspname NOT LIKE 'pg_temp_%'
            AND n.nspname NOT LIKE 'pg_toast_temp_%'
-           AND ${extensionPatterns.replace(/nspname/g, "n.nspname")}
          ORDER BY n.nspname, c.relname`,
-        params,
       ),
     ]);
 
     const bySchema = new Map<string, PostgresSchemaNode>();
     for (const row of namespacesResult.rows) {
       if (SYSTEM_SCHEMAS.has(row.schema_name)) continue;
+      if (isHiddenSchemaName(row.schema_name)) continue;
       bySchema.set(row.schema_name, { name: row.schema_name, tables: [], views: [] });
     }
     for (const row of objectsResult.rows) {
       if (SYSTEM_SCHEMAS.has(row.schema_name)) continue;
+      if (isHiddenSchemaName(row.schema_name)) continue;
       let entry = bySchema.get(row.schema_name);
       if (!entry) {
         entry = { name: row.schema_name, tables: [], views: [] };
@@ -489,6 +488,19 @@ export class PostgresService {
     if (!existing) throw new Error("Postgres connection is not active.");
     return existing;
   }
+}
+
+/**
+ * True when a schema name belongs to an extension's bookkeeping namespace —
+ * the user almost never wants to see these in the sidebar tree. Exported for
+ * the unit test that locks the TimescaleDB / Supabase / pg_partman list.
+ */
+export function isHiddenSchemaName(name: string): boolean {
+  if (HIDDEN_SCHEMA_NAMES.has(name)) return true;
+  for (const prefix of HIDDEN_SCHEMA_PREFIXES) {
+    if (name.startsWith(prefix)) return true;
+  }
+  return false;
 }
 
 function buildClientConfig(profile: ConnectionProfileWithPassword): pg.ClientConfig {

@@ -1,10 +1,26 @@
+import { memo } from "react";
 import { ChevronDown } from "lucide-react";
 import type { KeyspaceNode as KeyspaceNodeData } from "../../../core/cassandra/CassandraService";
 import { ProfileListItem } from "../../../core/ipc";
 import { TableIdentity } from "../../../core/shared/messages";
 import { TableRow } from "./TableRow";
 
-export function KeyspaceNode({
+/**
+ * Memoized for the same reason as PostgresSchemaList — large keyspaces would
+ * otherwise re-render every table row on unrelated app-level state churn
+ * (modal open/close, busy flag flips). The custom comparator ignores
+ * `onOpenTable` identity since it's a fresh closure on every App render but
+ * always points at the same store action.
+ */
+export const KeyspaceNode = memo(KeyspaceNodeImpl, (prev, next) =>
+  prev.profile.id === next.profile.id &&
+  prev.keyspace === next.keyspace &&
+  prev.selectedTable?.profileId === next.selectedTable?.profileId &&
+  prev.selectedTable?.keyspace === next.selectedTable?.keyspace &&
+  prev.selectedTable?.table === next.selectedTable?.table
+);
+
+function KeyspaceNodeImpl({
   profile,
   keyspace,
   selectedTable,
