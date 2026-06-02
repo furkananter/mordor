@@ -14,6 +14,7 @@ import {
 import { Button } from "../../components/ui/Button";
 import { PanelHeader } from "../../components/ui/PanelHeader";
 import { SegmentedControl, SegmentedOption } from "../../components/ui/SegmentedControl";
+import { TabPanel } from "../../components/ui/TabPanel";
 import { useConnectionStore } from "../../store/connection";
 import { useLayoutStore } from "../../store/layout";
 import { useStatusStore } from "../../store/status";
@@ -70,25 +71,25 @@ export function ClusterWorkspace({
             options={TAB_OPTIONS}
           />
         </div>
-        <div key={tab} className="anim-fade-slide-up flex min-h-0 flex-1 flex-col">
-          {tab === "cql" ? (
-            <CqlPanel
-              queryText={queryText}
-              queryResult={queryResult}
-              loading={queryLoading}
-              onChange={onQueryChange}
-              onRun={onRun}
-              placeholder={`-- Run CQL against ${profile.name}\nSELECT keyspace_name, table_name FROM system_schema.tables;`}
-              history={history}
-            />
-          ) : tab === "migrations" ? (
-            <Suspense fallback={<div className="grid h-full place-items-center text-[11.5px] text-muted">Loading migrations…</div>}>
-              <MigrationsPage embedded lockedProfileId={profile.id} />
-            </Suspense>
-          ) : (
-            <ClusterSchemaPanel profile={profile} />
-          )}
-        </div>
+        <TabPanel active={tab === "cql"}>
+          <CqlPanel
+            queryText={queryText}
+            queryResult={queryResult}
+            loading={queryLoading}
+            onChange={onQueryChange}
+            onRun={onRun}
+            placeholder={`-- Run CQL against ${profile.name}\nSELECT keyspace_name, table_name FROM system_schema.tables;`}
+            history={history}
+          />
+        </TabPanel>
+        <TabPanel active={tab === "migrations"}>
+          <Suspense fallback={<div className="grid h-full place-items-center text-[11.5px] text-muted">Loading migrations…</div>}>
+            <MigrationsPage embedded lockedProfileId={profile.id} />
+          </Suspense>
+        </TabPanel>
+        <TabPanel active={tab === "schema"}>
+          <ClusterSchemaPanel profile={profile} />
+        </TabPanel>
       </section>
     </div>
   );
