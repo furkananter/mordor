@@ -4,7 +4,10 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   plugins: [react({})],
   define: {
-    __APP_VERSION__: JSON.stringify("test")
+    __APP_VERSION__: JSON.stringify("test"),
+    // The main-process updater references this build-time flag; tests run
+    // against the unsigned (ad-hoc) code path.
+    __MAC_SIGNED__: "false"
   },
   test: {
     environment: "jsdom",

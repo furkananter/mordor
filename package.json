@@ -84,53 +84,5 @@
     "vite": "8.0.10",
     "vitest": "latest",
     "wait-on": "^8.0.5"
-  },
-  "build": {
-    "appId": "com.mordor.db",
-    "productName": "Mordor",
-    "executableName": "Mordor",
-    "directories": {
-      "output": "release"
-    },
-    "asar": true,
-    "files": [
-      "dist/**",
-      "package.json"
-    ],
-    "extraResources": [
-      {
-        "from": "media",
-        "to": "media"
-      }
-    ],
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "furkananter",
-        "repo": "mordor",
-        "releaseType": "release"
-      }
-    ],
-    "mac": {
-      "icon": "media/macos/AppIcon.icns",
-      "identity": "-",
-      "target": [
-        "dmg",
-        "zip"
-      ]
-    },
-    "win": {
-      "icon": "media/macos/AppIcon512.png",
-      "target": [
-        "nsis"
-      ]
-    },
-    "linux": {
-      "icon": "media/macos/AppIcon512.png",
-      "target": [
-        "AppImage"
-      ],
-      "category": "Development"
-    }
   }
 }

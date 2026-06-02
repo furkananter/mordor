@@ -31,16 +31,20 @@ const GITHUB_LATEST_API =
  *     download in the background, then "Restart to install" applies the
  *     update via Squirrel.
  *
- *   - **macOS:** the ad-hoc-signed (`identity: "-"`) build can't pass
- *     Squirrel.mac's signature check, so we don't run electron-updater here
- *     at all. Instead we hit the GitHub Releases API directly, and when a
- *     newer version exists we download the matching `.dmg` ourselves in the
- *     background (same `downloading`/`downloaded` states the other platforms
- *     report, with a SHA-256 integrity check). Because Squirrel can't apply
- *     an ad-hoc build, the install step opens the downloaded DMG for a
- *     drag-to-Applications install rather than relaunching in place — the
- *     honest best we can do without a real Developer ID. The GitHub Releases
- *     link stays available as a manual fallback.
+ *   - **macOS (Developer-ID signed + notarized):** same as Linux/Windows.
+ *     `__MAC_SIGNED__` is baked in at build time (see scripts/build-main.mjs);
+ *     when true, Squirrel.mac can verify and apply the update, so we let
+ *     electron-updater drive the seamless download + restart flow.
+ *
+ *   - **macOS (ad-hoc, `identity: "-"`):** the unsigned/ad-hoc build can't pass
+ *     Squirrel.mac's signature check, so we don't run electron-updater here.
+ *     Instead we hit the GitHub Releases API directly, and when a newer version
+ *     exists we download the matching `.dmg` ourselves in the background (same
+ *     `downloading`/`downloaded` states the other platforms report, with a
+ *     SHA-256 integrity check). The install step opens the downloaded DMG for a
+ *     drag-to-Applications install rather than relaunching in place. This is the
+ *     fallback for builds made before the signing secrets were configured; the
+ *     GitHub Releases link stays available as a manual escape hatch.
  *
  *   - **dev mode** (`!app.isPackaged`): no release to update against, the
  *     GitHub provider would 404. Status starts and stays `idle` so the
@@ -101,7 +105,10 @@ export class UpdaterService {
       // Already in flight — don't kick off a second one.
       return;
     }
-    if (process.platform === "darwin") {
+    // Only the ad-hoc macOS build needs the self-managed download. A signed +
+    // notarized build (`__MAC_SIGNED__`) can be applied by Squirrel, so it
+    // falls through to the electron-updater path like Linux/Windows.
+    if (process.platform === "darwin" && !__MAC_SIGNED__) {
       await this.checkForUpdatesMac();
       return;
     }
