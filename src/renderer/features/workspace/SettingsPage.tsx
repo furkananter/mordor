@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ExternalLink, RotateCw, ShieldAlert } from "lucide-react";
+import { Download, ExternalLink, RotateCw, ShieldAlert } from "lucide-react";
 import { UpdateStatus } from "../../../core/ipc";
 import { Button } from "../../components/ui/Button";
 import { FontScale, QueryMode, ThemePreference } from "../../store/constants";
@@ -204,13 +204,21 @@ function Section({
 function UpdatesPanel() {
   const status = useUpdaterStore((s) => s.status);
   const checkNow = useUpdaterStore((s) => s.checkNow);
+  const installNow = useUpdaterStore((s) => s.installNow);
   const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
 
-  const isBusy = status.kind === "checking" || status.kind === "downloading" || checking;
-  // `releasesUrl` flags a "manual download" platform (mac ad-hoc) where
-  // electron-updater can't apply the bits — show the GitHub link instead of
-  // a re-check button so the user has a way forward.
-  const canCheck = !status.releasesUrl;
+  // `available` is a brief, auto-downloading state on every platform now — keep
+  // the check button disabled through it so a second check can't race the
+  // download that's already starting.
+  const isBusy =
+    checking ||
+    status.kind === "checking" ||
+    status.kind === "available" ||
+    status.kind === "downloading";
+  const isDownloaded = status.kind === "downloaded";
+  // mac downloads a DMG to open manually; other platforms relaunch via Squirrel.
+  const opensInstaller = Boolean(status.installerPath);
 
   const handleCheck = async () => {
     setChecking(true);
@@ -221,6 +229,15 @@ function UpdatesPanel() {
     }
   };
 
+  const handleInstall = async () => {
+    setInstalling(true);
+    try {
+      await installNow();
+    } finally {
+      setInstalling(false);
+    }
+  };
+
   return (
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-3 rounded-ui border border-line-soft bg-panel-soft px-3 py-2">
@@ -228,26 +245,56 @@ function UpdatesPanel() {
           <span className="text-[12.5px] text-text">{statusLine(status)}</span>
           <span className="text-[11px] text-muted">{detailLine(status)}</span>
         </div>
-        {canCheck ? (
+        {isDownloaded ? (
+          <Button
+            variant="primary"
+            onClick={() => void handleInstall()}
+            disabled={installing}
+            tooltip={opensInstaller ? "Open the downloaded installer" : "Restart and install the update"}
+          >
+            {opensInstaller ? (
+              <Download size={11} strokeWidth={1.7} />
+            ) : (
+              <RotateCw size={11} strokeWidth={1.7} />
+            )}
+            <span>{installLabel(opensInstaller, installing)}</span>
+          </Button>
+        ) : (
           <Button onClick={() => void handleCheck()} disabled={isBusy} tooltip="Check for updates now">
             <RotateCw size={11} strokeWidth={1.7} className={isBusy ? "animate-spin" : undefined} />
-            <span>{isBusy ? "Checking…" : "Check now"}</span>
+            <span>{isBusy ? checkLabel(status) : "Check now"}</span>
           </Button>
-        ) : status.releasesUrl ? (
-          <Button
-            onClick={() => window.open(status.releasesUrl, "_blank", "noopener,noreferrer")}
-            tooltip="Open the GitHub releases page"
-          >
-            <ExternalLink size={11} strokeWidth={1.7} />
-            <span>Releases page</span>
-          </Button>
-        ) : null}
+        )}
       </div>
       {status.kind === "error" && status.error ? (
         <p className="px-1 text-[11px] text-danger">{status.error}</p>
       ) : null}
+      {status.releasesUrl ? (
+        <p className="px-1 text-[11px] leading-[1.5] text-muted">
+          This build isn't signed with a Developer ID, so Mordor downloads the
+          update and opens the installer for you — drag Mordor into Applications
+          to finish.{" "}
+          <button
+            type="button"
+            className="underline underline-offset-2 hover:text-text"
+            onClick={() => window.open(status.releasesUrl, "_blank", "noopener,noreferrer")}
+          >
+            <ExternalLink size={10} strokeWidth={1.7} className="mr-0.5 inline align-[-1px]" />
+            Releases page
+          </button>
+        </p>
+      ) : null}
     </div>
   );
+}
+
+function installLabel(opensInstaller: boolean, installing: boolean): string {
+  if (opensInstaller) return installing ? "Opening…" : "Open installer";
+  return installing ? "Restarting…" : "Restart to install";
+}
+
+function checkLabel(status: UpdateStatus): string {
+  return status.kind === "downloading" ? "Downloading…" : "Checking…";
 }
 
 function statusLine(status: UpdateStatus): string {
@@ -257,27 +304,24 @@ function statusLine(status: UpdateStatus): string {
     case "checking":
       return "Checking for updates…";
     case "available":
-      return status.releasesUrl
-        ? `Mordor ${status.version ?? ""} available — download from GitHub Releases`
-        : `Mordor ${status.version ?? ""} available — downloading…`;
+      return `Mordor ${status.version ?? ""} available — downloading…`;
     case "downloading":
       return `Downloading${status.progress ? ` · ${status.progress.percent}%` : "…"}`;
     case "downloaded":
-      return `Mordor ${status.version ?? ""} downloaded — restart to install`;
+      return status.installerPath
+        ? `Mordor ${status.version ?? ""} downloaded — open the installer to finish`
+        : `Mordor ${status.version ?? ""} downloaded — restart to install`;
     case "not-available":
       return "Mordor is up to date";
     case "error":
       return "Update check failed";
     case "unsupported":
-      // mac ad-hoc — in-app update path is gated by Squirrel signature check.
+      // Reserved — no platform currently reports this.
       return "In-app updates are not available on this build";
   }
 }
 
 function detailLine(status: UpdateStatus): string {
-  if (status.releasesUrl) {
-    return "This build isn't signed with a Developer ID; download new releases from GitHub.";
-  }
   if (!status.lastCheckedAt) return "Mordor will check automatically a few seconds after launch.";
   return `Last checked: ${formatRelative(status.lastCheckedAt)}`;
 }

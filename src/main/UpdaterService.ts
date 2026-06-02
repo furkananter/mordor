@@ -1,4 +1,9 @@
-import { app, type BrowserWindow } from "electron";
+import { app, shell, type BrowserWindow } from "electron";
+import { createWriteStream } from "node:fs";
+import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { pipeline } from "node:stream/promises";
+import { join } from "node:path";
 import type { AppUpdater, UpdateInfo } from "electron-updater";
 import type { UpdateStatus } from "../core/ipc";
 
@@ -28,11 +33,14 @@ const GITHUB_LATEST_API =
  *
  *   - **macOS:** the ad-hoc-signed (`identity: "-"`) build can't pass
  *     Squirrel.mac's signature check, so we don't run electron-updater here
- *     at all. Instead we hit the GitHub Releases API directly to learn
- *     whether a newer version exists, then surface a versioned banner with
- *     a manual-download CTA. Without a real Developer ID there is no other
- *     option; pretending an in-app install will work and then failing at
- *     restart-time would be worse than this honest fallback.
+ *     at all. Instead we hit the GitHub Releases API directly, and when a
+ *     newer version exists we download the matching `.dmg` ourselves in the
+ *     background (same `downloading`/`downloaded` states the other platforms
+ *     report, with a SHA-256 integrity check). Because Squirrel can't apply
+ *     an ad-hoc build, the install step opens the downloaded DMG for a
+ *     drag-to-Applications install rather than relaunching in place — the
+ *     honest best we can do without a real Developer ID. The GitHub Releases
+ *     link stays available as a manual fallback.
  *
  *   - **dev mode** (`!app.isPackaged`): no release to update against, the
  *     GitHub provider would 404. Status starts and stays `idle` so the
@@ -46,6 +54,10 @@ export class UpdaterService {
   private status: UpdateStatus = { kind: "idle" };
   private windows = new Set<BrowserWindow>();
   private listenersBound = false;
+  // Guards the self-managed macOS download so a second check (e.g. the user
+  // mashing "Check now" during the brief `available` window) can't kick off a
+  // concurrent fetch that clobbers the same `.part` file.
+  private macDownloadInFlight = false;
 
   /** Register a renderer for push notifications. Idempotent. */
   attachWindow(window: BrowserWindow): void {
@@ -110,13 +122,14 @@ export class UpdaterService {
 
   /**
    * macOS path: hit the GitHub Releases API ourselves and compare versions.
-   * Doesn't try to invoke electron-updater because Squirrel.mac would reject
-   * the ad-hoc-signed apply step. When a newer release exists we set
-   * `kind: "available"` with `releasesUrl` so the renderer can render a
-   * manual-download CTA. When the current build is already latest, set
-   * `kind: "not-available"` so the banner hides itself.
+   * Doesn't invoke electron-updater because Squirrel.mac would reject the
+   * ad-hoc-signed apply step. When a newer release exists we download the
+   * matching `.dmg` ourselves (see `downloadMacUpdate`) so the update is on
+   * disk and one click from installing; when the current build is already
+   * latest we set `kind: "not-available"` so the banner hides itself.
    */
   private async checkForUpdatesMac(): Promise<void> {
+    if (this.macDownloadInFlight) return;
     this.setStatus({ kind: "checking", lastCheckedAt: Date.now() });
     try {
       const res = await fetch(GITHUB_LATEST_API, {
@@ -125,44 +138,202 @@ export class UpdaterService {
       if (!res.ok) {
         throw new Error(`GitHub API responded ${res.status}`);
       }
-      const data = (await res.json()) as { tag_name?: string };
+      const data = (await res.json()) as {
+        tag_name?: string;
+        assets?: RawGithubAsset[];
+      };
       const latest = (data.tag_name ?? "").replace(/^v/, "").trim();
       const current = app.getVersion();
       if (!latest) {
         this.setStatus({ kind: "not-available", lastCheckedAt: Date.now() });
         return;
       }
-      if (isNewerSemver(latest, current)) {
-        this.setStatus({
-          kind: "available",
-          version: latest,
-          releasesUrl: RELEASES_URL,
-          lastCheckedAt: Date.now(),
-        });
-      } else {
+      if (!isNewerSemver(latest, current)) {
         this.setStatus({
           kind: "not-available",
           version: latest,
           lastCheckedAt: Date.now(),
         });
+        return;
+      }
+      // Newer version exists. Mark it available immediately so the UI reacts,
+      // then auto-download the architecture-matched DMG. If no suitable asset
+      // is published (e.g. a release that only shipped zips) we leave the
+      // status at `available` + `releasesUrl` so the manual link still works.
+      const asset = pickMacAsset(data.assets ?? [], process.arch);
+      this.setStatus({
+        kind: "available",
+        version: latest,
+        releasesUrl: RELEASES_URL,
+        lastCheckedAt: Date.now(),
+      });
+      if (asset) {
+        await this.downloadMacUpdate(asset, latest);
       }
     } catch (caught) {
       this.setStatus({
         kind: "error",
         error: caught instanceof Error ? caught.message : String(caught),
+        // Keep the manual-download escape hatch on failures too.
+        releasesUrl: RELEASES_URL,
         lastCheckedAt: Date.now(),
       });
     }
   }
 
   /**
-   * Apply a previously-downloaded update. Quits the app and relaunches into
-   * the new version — there's no recovery path if the user has unsaved work,
-   * so the UI should confirm before calling this.
+   * Stream the macOS DMG to a cache dir under `userData`, reporting progress
+   * with the same `downloading` status shape the other platforms emit, then
+   * verify its SHA-256 (when GitHub published a digest) before flipping to
+   * `downloaded`. Writes to a `.part` file and renames on success so a partial
+   * or corrupt download never gets the final, "trusted" name.
    */
-  async installAndRestart(): Promise<void> {
+  private async downloadMacUpdate(
+    asset: MacReleaseAsset,
+    version: string,
+  ): Promise<void> {
+    if (this.macDownloadInFlight) return;
+    this.macDownloadInFlight = true;
+    const updatesDir = join(app.getPath("userData"), "updates");
+    const finalPath = join(updatesDir, asset.name);
+    const partPath = `${finalPath}.part`;
+    try {
+      await mkdir(updatesDir, { recursive: true });
+
+      // A previous check this launch (or a prior one) may already have a fully
+      // verified copy — only fully-downloaded files ever get the final name,
+      // so a size match is enough to trust it and skip re-fetching ~130 MB.
+      if (await hasCompleteCopy(finalPath, asset.size)) {
+        this.setStatus({
+          kind: "downloaded",
+          version,
+          installerPath: finalPath,
+          releasesUrl: RELEASES_URL,
+          lastCheckedAt: Date.now(),
+        });
+        return;
+      }
+
+      // Drop stale installers (old versions, leftover `.part`) so the cache
+      // doesn't grow by ~130 MB per release.
+      await pruneUpdatesDir(updatesDir, asset.name);
+
+      this.setStatus({
+        kind: "downloading",
+        version,
+        releasesUrl: RELEASES_URL,
+        progress: { percent: 0, bytesPerSecond: 0, transferred: 0, total: asset.size },
+        lastCheckedAt: Date.now(),
+      });
+
+      const res = await fetch(asset.url, {
+        headers: { Accept: "application/octet-stream" },
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`Download failed: HTTP ${res.status}`);
+      }
+      const total =
+        asset.size || Number(res.headers.get("content-length") ?? 0);
+
+      const hash = createHash("sha256");
+      const startedAt = Date.now();
+      let transferred = 0;
+      let lastEmit = 0;
+      const reader = res.body.getReader();
+      // Drive the byte stream through a generator into the file with
+      // `pipeline`, which applies backpressure and — unlike a hand-rolled
+      // write/drain loop — tears both ends down and rejects on any write error
+      // (disk full, permissions) instead of hanging on a drain/close that
+      // never fires. We hash and report progress as each chunk flows through.
+      const emitProgress = (): void => {
+        const now = Date.now();
+        // Throttle to ~4/s; the byte loop fires far faster and flooding IPC
+        // would just jank the renderer's progress bar.
+        if (now - lastEmit < 250) return;
+        lastEmit = now;
+        const elapsed = Math.max(1, now - startedAt) / 1000;
+        this.setStatus({
+          kind: "downloading",
+          version,
+          releasesUrl: RELEASES_URL,
+          progress: {
+            percent: total ? Math.round((transferred / total) * 100) : 0,
+            bytesPerSecond: Math.round(transferred / elapsed),
+            transferred,
+            total,
+          },
+          lastCheckedAt: Date.now(),
+        });
+      };
+      await pipeline(
+        async function* () {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) return;
+            const chunk = Buffer.from(value);
+            hash.update(chunk);
+            transferred += chunk.length;
+            emitProgress();
+            yield chunk;
+          }
+        },
+        createWriteStream(partPath),
+      );
+
+      // Verify integrity when GitHub supplied a digest; a mismatch means a
+      // truncated or tampered download, so scrap it rather than offer a broken
+      // installer.
+      if (asset.sha256) {
+        const digest = hash.digest("hex");
+        if (digest !== asset.sha256) {
+          await rm(partPath, { force: true });
+          throw new Error("Downloaded update failed its integrity check.");
+        }
+      }
+
+      await rename(partPath, finalPath);
+      this.setStatus({
+        kind: "downloaded",
+        version,
+        installerPath: finalPath,
+        releasesUrl: RELEASES_URL,
+        lastCheckedAt: Date.now(),
+      });
+    } catch (caught) {
+      await rm(partPath, { force: true }).catch(() => undefined);
+      this.setStatus({
+        kind: "error",
+        error: caught instanceof Error ? caught.message : String(caught),
+        version,
+        releasesUrl: RELEASES_URL,
+        lastCheckedAt: Date.now(),
+      });
+    } finally {
+      this.macDownloadInFlight = false;
+    }
+  }
+
+  /**
+   * Apply a previously-downloaded update.
+   *
+   *   - **macOS:** open the downloaded DMG so Finder mounts it and the user
+   *     drags Mordor into /Applications. We deliberately don't quit — the
+   *     ad-hoc build can't be swapped in place, the user may have unsaved
+   *     work, and the DMG window guides the rest.
+   *
+   *   - **Linux/Windows:** hand off to Squirrel, which quits and relaunches
+   *     into the new version. There's no recovery path if the user has unsaved
+   *     work, so the UI should confirm before calling this.
+   */
+  async applyUpdate(): Promise<void> {
     if (this.status.kind !== "downloaded") {
       throw new Error("No update is downloaded — nothing to install.");
+    }
+    if (this.status.installerPath) {
+      // shell.openPath resolves to "" on success or an error string otherwise.
+      const failure = await shell.openPath(this.status.installerPath);
+      if (failure) throw new Error(failure);
+      return;
     }
     const autoUpdater = await loadUpdater();
     // `isSilent: true` suppresses the Windows NSIS UI; `isForceRunAfter: true`
@@ -277,4 +448,93 @@ export function isNewerSemver(candidate: string, current: string): boolean {
   if (aPre === "" && bPre !== "") return true;
   if (aPre !== "" && bPre === "") return false;
   return aPre > bPre;
+}
+
+/** Shape of the bits we read out of a GitHub release `assets[]` entry. */
+export interface RawGithubAsset {
+  name?: string;
+  browser_download_url?: string;
+  size?: number;
+  /** GitHub's content digest, e.g. `"sha256:<64 hex>"`; may be absent. */
+  digest?: string | null;
+}
+
+/** The normalized macOS installer asset we hand to `downloadMacUpdate`. */
+export interface MacReleaseAsset {
+  name: string;
+  url: string;
+  size: number;
+  /** Lower-case hex SHA-256, or undefined when GitHub didn't publish one. */
+  sha256?: string;
+}
+
+/**
+ * Choose the DMG matching the running architecture. electron-builder names the
+ * Apple-Silicon image `…-arm64.dmg` and the Intel one `….dmg` (no arch
+ * suffix). An arm64 host can run the Intel build under Rosetta, so it falls
+ * back to the Intel DMG when no arm64 one is published; an Intel host cannot
+ * run an arm64 build, so it never falls back. Returns undefined when nothing
+ * suitable exists, letting the caller keep the manual-download link instead.
+ */
+export function pickMacAsset(
+  assets: RawGithubAsset[],
+  arch: string,
+): MacReleaseAsset | undefined {
+  const dmgs = assets.filter(
+    (a): a is RawGithubAsset & { name: string; browser_download_url: string } =>
+      typeof a.name === "string" &&
+      a.name.endsWith(".dmg") &&
+      typeof a.browser_download_url === "string",
+  );
+  if (dmgs.length === 0) return undefined;
+  const isArm = (name: string) => /arm64/i.test(name);
+  const arm = dmgs.find((a) => isArm(a.name));
+  const intel = dmgs.find((a) => !isArm(a.name));
+  const match = arch === "arm64" ? (arm ?? intel) : intel;
+  if (!match) return undefined;
+  const normalized: MacReleaseAsset = {
+    name: match.name,
+    url: match.browser_download_url,
+    size: match.size ?? 0,
+  };
+  const sha256 = parseSha256(match.digest);
+  if (sha256) normalized.sha256 = sha256;
+  return normalized;
+}
+
+/** Pull the hex out of a `"sha256:<hex>"` digest; undefined if not present. */
+export function parseSha256(digest: string | null | undefined): string | undefined {
+  if (!digest) return undefined;
+  const match = /^sha256:([0-9a-f]{64})$/i.exec(digest.trim());
+  return match ? match[1]!.toLowerCase() : undefined;
+}
+
+/**
+ * True when `path` already holds a complete download. We only ever rename a
+ * file to its final name after a successful (and, when possible, verified)
+ * download, so a matching byte size is sufficient evidence — no need to re-hash
+ * ~130 MB on every launch.
+ */
+async function hasCompleteCopy(path: string, expectedSize: number): Promise<boolean> {
+  try {
+    const info = await stat(path);
+    return info.isFile() && (!expectedSize || info.size === expectedSize);
+  } catch {
+    return false;
+  }
+}
+
+/** Best-effort removal of everything in the updates dir except `keepName`. */
+async function pruneUpdatesDir(dir: string, keepName: string): Promise<void> {
+  try {
+    const entries = await readdir(dir);
+    await Promise.all(
+      entries
+        .filter((name) => name !== keepName)
+        .map((name) => rm(join(dir, name), { force: true })),
+    );
+  } catch {
+    // The dir may not exist yet, or a file may be locked — neither is fatal to
+    // the download we're about to start.
+  }
 }

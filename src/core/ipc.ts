@@ -119,9 +119,16 @@ export interface SchemaScriptResult {
  *   - downloaded    → bits on disk, waiting for the user to confirm install
  *   - not-available → server reachable, current version is latest
  *   - error         → check or download failed; `error` carries the message
- *   - unsupported   → mac without a Developer ID (Squirrel rejects ad-hoc
- *                     builds); the renderer offers a manual download link
- *                     to `releasesUrl` instead of an in-app install
+ *   - unsupported   → reserved for platforms with no update path at all
+ *
+ * On Linux/Windows electron-updater drives the whole lifecycle and the
+ * `downloaded` state means "restart to install". On macOS the ad-hoc-signed
+ * build can't be applied by Squirrel, so the main process downloads the
+ * matching DMG itself (still surfacing `downloading`/`downloaded`) and the
+ * `downloaded` state instead carries `installerPath` — the renderer offers
+ * "Open installer" to mount it for a drag-to-Applications install. The mac
+ * statuses also keep `releasesUrl` so a manual GitHub download stays one
+ * click away if the assisted flow ever fails.
  */
 export type UpdateStatusKind =
   | "idle"
@@ -147,6 +154,13 @@ export interface UpdateStatus {
   error?: string;
   lastCheckedAt?: number;
   releasesUrl?: string;
+  /**
+   * macOS only: absolute path to the downloaded `.dmg` once `kind` is
+   * `downloaded`. Its presence is what tells the renderer to render "Open
+   * installer" (mount the DMG) instead of the Linux/Windows "Restart to
+   * install" (Squirrel `quitAndInstall`).
+   */
+  installerPath?: string;
 }
 
 export interface CassandraDeskApi {

@@ -14,5 +14,5 @@ import { UpdaterService } from "./UpdaterService";
 export function registerUpdaterIpc(updater: UpdaterService): void {
   ipcMain.handle(ipcChannels.getUpdateStatus, () => updater.getStatus());
   ipcMain.handle(ipcChannels.checkForUpdates, () => updater.checkForUpdates());
-  ipcMain.handle(ipcChannels.installUpdate, () => updater.installAndRestart());
+  ipcMain.handle(ipcChannels.installUpdate, () => updater.applyUpdate());
 }
