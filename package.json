@@ -22,7 +22,7 @@
     "package": "npm run build && electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "release": "npm run build && electron-builder",
-    "dist:mac": "npm run build && electron-builder --mac --arm64 --x64",
+    "dist:mac": "npm run build && electron-builder --mac --universal",
     "dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
     "dist:mac:x64": "npm run build && electron-builder --mac --x64",
     "dist:win:arm64": "npm run build && electron-builder --win --arm64",

@@ -72,8 +72,29 @@ const config = {
     // actually signing (an ad-hoc build with hardened runtime fails to launch).
     hardenedRuntime: signMac,
     gatekeeperAssess: false,
-    entitlements: "build/entitlements.mac.plist",
-    entitlementsInherit: "build/entitlements.mac.plist",
+    // node-pty keeps its native binaries in arch-named paths
+    // (bin/darwin-arm64-146/node-pty.node AND prebuilds/darwin-arm64/pty.node).
+    // When building the universal app, @electron/universal sees the arm64 copies
+    // left over in BOTH the x64 and arm64 slices, finds them byte-identical, and
+    // aborts ("Detected file ... the same in both x64 and arm64 builds and not
+    // covered by the x64ArchFiles rule"). The real per-arch binaries live in
+    // separate darwin-{x64,arm64} folders and node-pty picks the right one by
+    // process.arch at runtime, so the duplicates are harmless — whitelist the
+    // whole module so the lipo merge proceeds. keytar lipo-merges normally
+    // (single path, genuinely different per arch) and needs no entry here.
+    x64ArchFiles: "**/node-pty/**",
+    // Entitlements only apply to a real Developer ID signature. Passing them on
+    // the ad-hoc path makes electron-builder's codesign step fail with
+    // "... not a file" (the entitlements get fed to an ad-hoc sign that can't
+    // consume them), which is what broke the 0.5.8 mac release. Gate them behind
+    // signMac so unsigned/local builds keep the plain ad-hoc signature that
+    // worked through 0.5.5.
+    ...(signMac
+      ? {
+          entitlements: "build/entitlements.mac.plist",
+          entitlementsInherit: "build/entitlements.mac.plist",
+        }
+      : {}),
     notarize: notarizeMac,
   },
   win: {
