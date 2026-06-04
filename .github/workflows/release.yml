@@ -26,8 +26,8 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            label: macOS (arm64 + x64)
-            build_args: --mac --arm64 --x64
+            label: macOS (universal)
+            build_args: --mac --universal
           - os: ubuntu-latest
             label: Linux (x64 AppImage)
             build_args: --linux --x64
