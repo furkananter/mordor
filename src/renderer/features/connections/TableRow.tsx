@@ -51,7 +51,7 @@ function TableRowImpl({
   const qualified = `${keyspace}.${identity.table}`;
   const copy = (value: string) => () => void navigator.clipboard.writeText(value);
   return (
-    <li>
+    <li className="tree-row">
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <button
