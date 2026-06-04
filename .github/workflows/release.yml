@@ -101,4 +101,14 @@ jobs:
       - name: Package & publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder ${{ matrix.build_args }} --publish always
+        # When the macOS signing secrets aren't configured, the job-level env
+        # block above still defines CSC_LINK/CSC_KEY_PASSWORD as empty strings.
+        # A *defined-but-empty* CSC_LINK makes electron-builder enter its
+        # certificate-import path and then abort with "<workspace> not a file"
+        # (it resolves the empty path to the repo root) — this is what failed
+        # the macOS release. Undefining them when empty restores the intended
+        # ad-hoc signature (identity "-"). When the secrets are present CSC_LINK
+        # is non-empty, so this is a no-op and the Developer ID flow runs.
+        run: |
+          if [ -z "$CSC_LINK" ]; then unset CSC_LINK CSC_KEY_PASSWORD; fi
+          npx electron-builder ${{ matrix.build_args }} --publish always
