@@ -1,7 +1,8 @@
 import { create } from "zustand";
 import { CreateProfileInput, ProfileListItem } from "../../core/ipc";
 import { runWithStatus, useStatusStore } from "./status";
-import { useSchemaStore } from "./schema";
+import { useSchemaStore, clearProfilePreviewCache } from "./schema";
+import { useConnectivityStore } from "./connectivity";
 
 interface ConnectionState {
   profiles: ProfileListItem[];
@@ -18,6 +19,12 @@ interface ConnectionActions {
   deleteProfile(profileId: string): Promise<void>;
   connect(profileId: string): Promise<void>;
   disconnect(profileId: string): Promise<void>;
+  /**
+   * Silently reconnect a set of profiles (e.g. on app boot). Fires all
+   * connections in parallel and swallows failures so one unreachable host
+   * doesn't block the others.
+   */
+  reconnectProfiles(profileIds: string[]): Promise<void>;
   /**
    * Re-fetch the keyspace/table list for a single cluster and update the
    * profile in the store. Use after DDL operations (migrations, CREATE TABLE,
@@ -39,9 +46,6 @@ export const useConnectionStore = create<ConnectionState & ConnectionActions>(
     profiles: [],
 
     init: async () => {
-      // Just load saved profiles on boot. Local detection is an explicit user action —
-      // it must never create connections behind the user's back (especially Redis on
-      // ports that happen to be open but don't speak the protocol).
       await runWithStatus("Loading connections", async () => {
         const profiles = await window.cassandraDesk.listProfiles();
         set({ profiles });
@@ -85,6 +89,8 @@ export const useConnectionStore = create<ConnectionState & ConnectionActions>(
         const profiles = await window.cassandraDesk.deleteProfile(profileId);
         set({ profiles });
         clearTableIfMatches(profileId);
+        clearProfilePreviewCache(profileId);
+        useConnectivityStore.getState().removeAutoConnect(profileId);
       });
     },
 
@@ -93,6 +99,7 @@ export const useConnectionStore = create<ConnectionState & ConnectionActions>(
         await window.cassandraDesk.connect(profileId);
         const profiles = await window.cassandraDesk.listProfiles();
         set({ profiles });
+        useConnectivityStore.getState().addAutoConnect(profileId);
       });
     },
 
@@ -101,7 +108,22 @@ export const useConnectionStore = create<ConnectionState & ConnectionActions>(
         const profiles = await window.cassandraDesk.disconnect(profileId);
         set({ profiles });
         clearTableIfMatches(profileId);
+        clearProfilePreviewCache(profileId);
+        useConnectivityStore.getState().removeAutoConnect(profileId);
       });
+    },
+
+    reconnectProfiles: async (profileIds) => {
+      if (profileIds.length === 0) return;
+      try {
+        await Promise.allSettled(
+          profileIds.map((id) => window.cassandraDesk.connect(id))
+        );
+        const profiles = await window.cassandraDesk.listProfiles();
+        set({ profiles });
+      } catch {
+        // keep boot resilient: reconnect is best-effort
+      }
     },
 
     refreshClusterSchema: async (profileId) => {
@@ -110,8 +132,6 @@ export const useConnectionStore = create<ConnectionState & ConnectionActions>(
         const profiles = await window.cassandraDesk.listProfiles();
         set({ profiles });
       } catch (caught) {
-        // Surface the failure but don't blow up the caller — they likely just
-        // finished a successful operation and the refresh is a secondary concern.
         useStatusStore
           .getState()
           .setError(caught instanceof Error ? caught.message : String(caught));
