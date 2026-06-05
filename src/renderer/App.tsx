@@ -93,7 +93,7 @@ export function App() {
       const profile = freshProfiles.find((p) => p.id === lastProfileId);
       if (!profile) return;
 
-      if (profile.connected && lastTable) {
+      if (profile.connected && lastTable?.profileId === lastProfileId) {
         await openTable(lastTable).catch(() => {
           // Table may no longer exist — fall back to the cluster view.
           selectProfile(lastProfileId);

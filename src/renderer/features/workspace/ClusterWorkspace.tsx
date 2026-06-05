@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ChevronRight, Database, Play, Table2 } from "lucide-react";
 import { ProfileListItem, SchemaScriptResult } from "../../../core/ipc";
 import { TableSchemaPayload } from "../../../core/shared/messages";
@@ -135,12 +135,17 @@ function ClusterSchemaBrowser({ profile }: { profile: ProfileListItem }) {
   const [tableSchema, setTableSchema] = useState<TableSchemaPayload | undefined>(undefined);
   const [loadingSchema, setLoadingSchema] = useState(false);
   const setError = useStatusStore((state) => state.setError);
+  const requestSeq = useRef(0);
 
   const keyspaces = profile.schema.kind === "cassandra" ? profile.schema.keyspaces : [];
 
   const handleSelectTable = async (keyspace: string, table: string) => {
     const key = `${keyspace}.${table}`;
-    if (key === selectedKey) return;
+    // Allow retry after a failed load (tableSchema still undefined); skip if
+    // already loaded and not in-flight.
+    if (key === selectedKey && tableSchema && !loadingSchema) return;
+
+    const requestId = ++requestSeq.current;
     setSelectedKey(key);
     setTableSchema(undefined);
     setLoadingSchema(true);
@@ -151,18 +156,23 @@ function ClusterSchemaBrowser({ profile }: { profile: ProfileListItem }) {
         keyspace,
         table
       });
+      if (requestId !== requestSeq.current) return;
       setTableSchema(schema);
     } catch (caught) {
+      if (requestId !== requestSeq.current) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
+      if (requestId !== requestSeq.current) return;
       setLoadingSchema(false);
     }
   };
 
-  // Reset when profile changes.
+  // Reset when profile changes; bump request seq to discard in-flight fetches.
   useEffect(() => {
+    requestSeq.current += 1;
     setSelectedKey(undefined);
     setTableSchema(undefined);
+    setLoadingSchema(false);
   }, [profile.id]);
 
   if (keyspaces.length === 0) {

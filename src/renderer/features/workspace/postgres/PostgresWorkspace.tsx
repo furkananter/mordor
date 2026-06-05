@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ChevronRight, Play, Table2 } from "lucide-react";
 import { PostgresProfileListItem, SchemaScriptResult } from "../../../../core/ipc";
 import { QueryResultPayload, TableSchemaPayload } from "../../../../core/shared/messages";
@@ -170,12 +170,15 @@ function PostgresSchemaBrowser({ profile }: { profile: PostgresProfileListItem }
   const [tableSchema, setTableSchema] = useState<TableSchemaPayload | undefined>(undefined);
   const [loadingSchema, setLoadingSchema] = useState(false);
   const setError = useStatusStore((state) => state.setError);
+  const requestSeq = useRef(0);
 
   const schemas = profile.schema.schemas;
 
   const handleSelectTable = async (schema: string, table: string) => {
     const key = `${schema}.${table}`;
-    if (key === selectedKey) return;
+    if (key === selectedKey && tableSchema && !loadingSchema) return;
+
+    const requestId = ++requestSeq.current;
     setSelectedKey(key);
     setTableSchema(undefined);
     setLoadingSchema(true);
@@ -186,17 +189,22 @@ function PostgresSchemaBrowser({ profile }: { profile: PostgresProfileListItem }
         keyspace: schema,
         table
       });
+      if (requestId !== requestSeq.current) return;
       setTableSchema(payload);
     } catch (caught) {
+      if (requestId !== requestSeq.current) return;
       setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
+      if (requestId !== requestSeq.current) return;
       setLoadingSchema(false);
     }
   };
 
   useEffect(() => {
+    requestSeq.current += 1;
     setSelectedKey(undefined);
     setTableSchema(undefined);
+    setLoadingSchema(false);
   }, [profile.id]);
 
   if (schemas.length === 0) {
@@ -325,7 +333,7 @@ function PostgresSchemaPanel({ profile }: { profile: PostgresProfileListItem }) 
   return (
     <section className="flex min-h-0 flex-1 flex-col bg-panel">
       <PanelHeader
-        title="Schema"
+        title="Apply DDL"
         meta={`${profile.name} · transactional DDL`}
         actions={
           <Button

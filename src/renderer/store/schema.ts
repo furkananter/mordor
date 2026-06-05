@@ -15,6 +15,9 @@ const LOAD_ALL_ROW_CEILING = 50_000;
 // In-memory preview cache keyed by "profileId:keyspace:table". Survives
 // navigation within a session so a "load all" sweep isn't lost when the user
 // switches tables and comes back. Not persisted — an app restart reloads fresh.
+// Capped at MAX_CACHE_TABLES entries (insertion-order eviction) to prevent
+// retaining many 50k-row snapshots simultaneously.
+const MAX_CACHE_TABLES = 10;
 const previewCache = new Map<string, PreviewRowsPayload>();
 
 function cacheKey(table: TableIdentity): string {
@@ -26,7 +29,14 @@ function getPreviewCache(table: TableIdentity): PreviewRowsPayload | undefined {
 }
 
 function setPreviewCache(table: TableIdentity, preview: PreviewRowsPayload): void {
-  previewCache.set(cacheKey(table), preview);
+  const key = cacheKey(table);
+  previewCache.delete(key); // move to end (most-recently-used)
+  previewCache.set(key, preview);
+  // Evict oldest entry when over the cap.
+  if (previewCache.size > MAX_CACHE_TABLES) {
+    const oldest = previewCache.keys().next().value;
+    if (oldest) previewCache.delete(oldest);
+  }
 }
 
 /** Called by the connection store when a profile disconnects to avoid stale cached rows. */
@@ -112,10 +122,12 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
             window.cassandraDesk.getTableSchema(table),
             window.cassandraDesk.getPreview(table)
           ]);
+          // Guard: user may have navigated away while the fetch was in flight.
+          if (!sameTable(get().selectedTable, table)) return;
           set({ schema, preview, tableState: "loaded" });
           setPreviewCache(table, preview);
         } catch (caught) {
-          set({ tableState: "idle" });
+          if (sameTable(get().selectedTable, table)) set({ tableState: "idle" });
           throw caught;
         }
       });

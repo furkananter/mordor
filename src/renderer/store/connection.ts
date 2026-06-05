@@ -115,13 +115,15 @@ export const useConnectionStore = create<ConnectionState & ConnectionActions>(
 
     reconnectProfiles: async (profileIds) => {
       if (profileIds.length === 0) return;
-      // Fire all reconnects in parallel; swallow individual failures so one
-      // unreachable host doesn't prevent the others from connecting.
-      await Promise.allSettled(
-        profileIds.map((id) => window.cassandraDesk.connect(id))
-      );
-      const profiles = await window.cassandraDesk.listProfiles();
-      set({ profiles });
+      try {
+        await Promise.allSettled(
+          profileIds.map((id) => window.cassandraDesk.connect(id))
+        );
+        const profiles = await window.cassandraDesk.listProfiles();
+        set({ profiles });
+      } catch {
+        // keep boot resilient: reconnect is best-effort
+      }
     },
 
     refreshClusterSchema: async (profileId) => {
