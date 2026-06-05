@@ -1,7 +1,7 @@
-import { lazy, Suspense, useState } from "react";
-import { Play } from "lucide-react";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { ChevronRight, Play, Table2 } from "lucide-react";
 import { PostgresProfileListItem, SchemaScriptResult } from "../../../../core/ipc";
-import { QueryResultPayload } from "../../../../core/shared/messages";
+import { QueryResultPayload, TableSchemaPayload } from "../../../../core/shared/messages";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,14 +20,19 @@ import { useConnectionStore } from "../../../store/connection";
 import { useLayoutStore } from "../../../store/layout";
 import { useStatusStore } from "../../../store/status";
 import { CqlPanel } from "../CqlPanel";
+import { SchemaInspector } from "../SchemaInspector";
 
-// Reuse the Cassandra cluster's persisted tab key so switching profiles
-// preserves the user's "I was on Schema" intent across DB types.
 type PostgresTab = "cql" | "schema";
+type SchemaMode = "browse" | "ddl";
 
 const TAB_OPTIONS: SegmentedOption<PostgresTab>[] = [
   { value: "cql", label: "SQL" },
   { value: "schema", label: "Schema" },
+];
+
+const SCHEMA_MODE_OPTIONS: SegmentedOption<SchemaMode>[] = [
+  { value: "browse", label: "Browse" },
+  { value: "ddl", label: "Apply DDL" },
 ];
 
 // CqlEditor is the heavy CodeMirror chunk; lazy-load so the SQL Console tab
@@ -127,12 +132,168 @@ export function PostgresWorkspace({
           />
         </TabPanel>
         <TabPanel active={tab === "schema"}>
-          <PostgresSchemaPanel profile={profile} />
+          <PostgresSchemaView profile={profile} />
         </TabPanel>
       </section>
     </div>
   );
 }
+
+// ─── Schema tab ──────────────────────────────────────────────────────────────
+
+function PostgresSchemaView({ profile }: { profile: PostgresProfileListItem }) {
+  const [mode, setMode] = useState<SchemaMode>("browse");
+
+  return (
+    <section className="flex min-h-0 flex-1 flex-col bg-panel">
+      <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5">
+        <span className="text-[11.5px] text-muted">{profile.name}</span>
+        <SegmentedControl
+          namespace="postgres-schema-mode"
+          ariaLabel="Schema view mode"
+          value={mode}
+          onChange={setMode}
+          options={SCHEMA_MODE_OPTIONS}
+        />
+      </div>
+      {mode === "browse" ? (
+        <PostgresSchemaBrowser profile={profile} />
+      ) : (
+        <PostgresSchemaPanel profile={profile} />
+      )}
+    </section>
+  );
+}
+
+function PostgresSchemaBrowser({ profile }: { profile: PostgresProfileListItem }) {
+  const [selectedKey, setSelectedKey] = useState<string | undefined>(undefined);
+  const [tableSchema, setTableSchema] = useState<TableSchemaPayload | undefined>(undefined);
+  const [loadingSchema, setLoadingSchema] = useState(false);
+  const setError = useStatusStore((state) => state.setError);
+
+  const schemas = profile.schema.schemas;
+
+  const handleSelectTable = async (schema: string, table: string) => {
+    const key = `${schema}.${table}`;
+    if (key === selectedKey) return;
+    setSelectedKey(key);
+    setTableSchema(undefined);
+    setLoadingSchema(true);
+    try {
+      const payload = await window.cassandraDesk.getTableSchema({
+        profileId: profile.id,
+        profileName: profile.name,
+        keyspace: schema,
+        table
+      });
+      setTableSchema(payload);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setLoadingSchema(false);
+    }
+  };
+
+  useEffect(() => {
+    setSelectedKey(undefined);
+    setTableSchema(undefined);
+  }, [profile.id]);
+
+  if (schemas.length === 0) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center text-[11.5px] text-muted">
+        No schemas found. Connect and refresh to populate the schema.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 overflow-hidden">
+      <div className="flex w-56 shrink-0 flex-col overflow-y-auto border-r border-line-soft bg-panel-soft">
+        {schemas.map((s) => (
+          <PostgresSchemaSection
+            key={s.name}
+            schema={s}
+            selectedKey={selectedKey}
+            onSelectTable={(table) => void handleSelectTable(s.name, table)}
+          />
+        ))}
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {selectedKey ? (
+          <SchemaInspector schema={loadingSchema ? undefined : tableSchema} />
+        ) : (
+          <div className="flex min-h-0 flex-1 items-center justify-center text-[11.5px] text-muted">
+            Select a table to view its columns.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PostgresSchemaSection({
+  schema,
+  selectedKey,
+  onSelectTable
+}: {
+  schema: PostgresProfileListItem["schema"]["schemas"][number];
+  selectedKey: string | undefined;
+  onSelectTable(table: string): void;
+}) {
+  const [open, setOpen] = useState(true);
+  const items = [
+    ...schema.tables.map((t) => ({ name: t.name, kind: "table" as const })),
+    ...schema.views.map((v) => ({ name: v.name, kind: "view" as const })),
+  ];
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-subtle hover:bg-line-soft/60"
+      >
+        <ChevronRight
+          size={11}
+          strokeWidth={1.7}
+          className={`shrink-0 text-subtle transition-transform ${open ? "rotate-90" : ""}`}
+        />
+        <span className="truncate">{schema.name}</span>
+        <span className="ml-auto shrink-0 text-[10px] font-normal text-muted">{items.length}</span>
+      </button>
+      {open ? (
+        <ul>
+          {items.map((item) => {
+            const key = `${schema.name}.${item.name}`;
+            const active = key === selectedKey;
+            return (
+              <li key={key}>
+                <button
+                  type="button"
+                  onClick={() => onSelectTable(item.name)}
+                  className={`flex w-full items-center gap-1.5 py-1 pl-6 pr-2 text-left text-[12px] ${
+                    active
+                      ? "bg-accent/10 text-accent"
+                      : "text-text hover:bg-line-soft/60"
+                  }`}
+                >
+                  <Table2 size={11} strokeWidth={1.7} className="shrink-0 text-subtle" />
+                  <span className="truncate">{item.name}</span>
+                  {item.kind === "view" ? (
+                    <span className="ml-auto shrink-0 text-[10px] text-muted">view</span>
+                  ) : null}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+// ─── DDL apply panel ─────────────────────────────────────────────────────────
 
 function PostgresSchemaPanel({ profile }: { profile: PostgresProfileListItem }) {
   const setError = useStatusStore((state) => state.setError);

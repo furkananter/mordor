@@ -16,6 +16,7 @@ import {
   clamp,
 } from "./constants";
 import { WorkspaceTab } from "../features/workspace/WorkspaceTabs";
+import { TableIdentity } from "../../core/shared/messages";
 
 interface LayoutState {
   activeTab: WorkspaceTab;
@@ -25,6 +26,10 @@ interface LayoutState {
   terminalOpen: boolean;
   terminalHeight: number;
   cqlEditorHeight: number;
+  /** Last profile the user navigated to — restored on next app open. */
+  lastProfileId: string | undefined;
+  /** Last table the user had open — restored if the profile reconnects. */
+  lastTable: TableIdentity | undefined;
 }
 
 interface LayoutActions {
@@ -36,6 +41,7 @@ interface LayoutActions {
   setTerminalOpen(open: boolean): void;
   setTerminalHeight(height: number): void;
   setCqlEditorHeight(height: number): void;
+  setLastNavigation(profileId: string | undefined, table?: TableIdentity): void;
 }
 
 export const useLayoutStore = create<LayoutState & LayoutActions>()(
@@ -48,8 +54,12 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
       terminalOpen: false,
       terminalHeight: TERMINAL_DEFAULT_HEIGHT,
       cqlEditorHeight: CQL_EDITOR_DEFAULT_HEIGHT,
+      lastProfileId: undefined,
+      lastTable: undefined,
 
       setActiveTab: (activeTab) => set({ activeTab }),
+      setLastNavigation: (profileId, table) =>
+        set({ lastProfileId: profileId, lastTable: table }),
       toggleSidebar: () =>
         set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),
       setSidebarWidth: (width) =>
@@ -93,6 +103,8 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
         terminalHeight: state.terminalHeight,
         cqlEditorHeight: state.cqlEditorHeight,
         activeTab: state.activeTab,
+        lastProfileId: state.lastProfileId,
+        lastTable: state.lastTable,
       }),
     },
   ),

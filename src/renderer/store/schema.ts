@@ -12,6 +12,30 @@ import { useRecentTablesStore } from "./recentTables";
 // tell the user rather than risk an out-of-memory tab on a multi-million-row table.
 const LOAD_ALL_ROW_CEILING = 50_000;
 
+// In-memory preview cache keyed by "profileId:keyspace:table". Survives
+// navigation within a session so a "load all" sweep isn't lost when the user
+// switches tables and comes back. Not persisted — an app restart reloads fresh.
+const previewCache = new Map<string, PreviewRowsPayload>();
+
+function cacheKey(table: TableIdentity): string {
+  return `${table.profileId}:${table.keyspace}:${table.table}`;
+}
+
+function getPreviewCache(table: TableIdentity): PreviewRowsPayload | undefined {
+  return previewCache.get(cacheKey(table));
+}
+
+function setPreviewCache(table: TableIdentity, preview: PreviewRowsPayload): void {
+  previewCache.set(cacheKey(table), preview);
+}
+
+/** Called by the connection store when a profile disconnects to avoid stale cached rows. */
+export function clearProfilePreviewCache(profileId: string): void {
+  for (const key of previewCache.keys()) {
+    if (key.startsWith(`${profileId}:`)) previewCache.delete(key);
+  }
+}
+
 interface SchemaState {
   selectedTable: TableIdentity | undefined;
   selectedProfileId: string | undefined;
@@ -29,9 +53,23 @@ interface SchemaActions {
   selectProfile(profileId: string): void;
   reloadSelectedTable(): Promise<void>;
   refreshPreviewSilent(): Promise<void>;
+  /** Live-mode tick: fetches the first page and prepends genuinely new rows at the
+   *  top of the current preview instead of replacing it, so loaded-all data is
+   *  preserved and new arrivals appear immediately at the top. Falls back to
+   *  refreshPreviewSilent when no PK columns are known. */
+  refreshPreviewLive(): Promise<void>;
   loadMorePreview(): Promise<void>;
   loadAllPreview(): Promise<void>;
   clearTable(): void;
+}
+
+function sameTable(a: TableIdentity | undefined, b: TableIdentity): boolean {
+  return (
+    !!a &&
+    a.profileId === b.profileId &&
+    a.keyspace === b.keyspace &&
+    a.table === b.table
+  );
 }
 
 export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => ({
@@ -44,31 +82,44 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
   previewLoadingAll: false,
 
   openTable: async (table) => {
+    const cached = getPreviewCache(table);
+
     set({
       selectedTable: table,
       selectedProfileId: table.profileId,
       schema: undefined,
-      preview: undefined,
-      tableState: "loading"
+      preview: cached,
+      // Show as "loaded" immediately when we have cached rows — user sees data
+      // right away while the schema metadata loads silently in the background.
+      tableState: cached ? "loaded" : "loading"
     });
     useLayoutStore.getState().setActiveTab("data");
+    useLayoutStore.getState().setLastNavigation(table.profileId, table);
     useQueryStore.getState().resetForTable(defaultQueryForTable(table));
     useRecentTablesStore.getState().recordOpen(table);
-    // Avoid eager import of useRedisStore to prevent cycles
     void import("./redis").then(({ useRedisStore }) => useRedisStore.getState().clearSelection());
 
-    await runWithStatus("Loading table", async () => {
-      try {
-        const [schema, preview] = await Promise.all([
-          window.cassandraDesk.getTableSchema(table),
-          window.cassandraDesk.getPreview(table)
-        ]);
-        set({ schema, preview, tableState: "loaded" });
-      } catch (caught) {
-        set({ tableState: "idle" });
-        throw caught;
-      }
-    });
+    if (cached) {
+      // Schema metadata is small — refresh silently without a loading spinner.
+      void window.cassandraDesk.getTableSchema(table).then((schema) => {
+        if (!sameTable(get().selectedTable, table)) return;
+        set({ schema });
+      }).catch(() => {/* non-critical — columns panel stays empty */});
+    } else {
+      await runWithStatus("Loading table", async () => {
+        try {
+          const [schema, preview] = await Promise.all([
+            window.cassandraDesk.getTableSchema(table),
+            window.cassandraDesk.getPreview(table)
+          ]);
+          set({ schema, preview, tableState: "loaded" });
+          setPreviewCache(table, preview);
+        } catch (caught) {
+          set({ tableState: "idle" });
+          throw caught;
+        }
+      });
+    }
   },
 
   reloadSelectedTable: async () => {
@@ -86,16 +137,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
     set({ previewLoadingMore: true });
     try {
       const next = await window.cassandraDesk.getPreview(selected, pageState);
-      // Skip the commit if the user moved away mid-flight.
-      const stillSelected = get().selectedTable;
-      if (
-        !stillSelected ||
-        stillSelected.profileId !== selected.profileId ||
-        stillSelected.keyspace !== selected.keyspace ||
-        stillSelected.table !== selected.table
-      ) {
-        return;
-      }
+      if (!sameTable(get().selectedTable, selected)) return;
       const previous = get().preview;
       if (!previous) return;
       const merged: PreviewRowsPayload = {
@@ -105,6 +147,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       };
       if (next.pageState) merged.pageState = next.pageState;
       set({ preview: merged });
+      setPreviewCache(selected, merged);
     } catch (caught) {
       useStatusStore.getState().setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -117,16 +160,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
     if (!selected || !get().preview?.pageState) return;
     if (get().previewLoadingAll || get().previewLoadingMore) return;
     set({ previewLoadingAll: true });
-    const sameTable = (other: TableIdentity | undefined): boolean =>
-      !!other &&
-      other.profileId === selected.profileId &&
-      other.keyspace === selected.keyspace &&
-      other.table === selected.table;
     try {
-      // Walk the continuation token until the server stops handing one back.
-      // Commit each page as it lands so the row count climbs visibly and the
-      // user can bail mid-sweep by switching tables. The page cap is a backstop
-      // against a driver that returns a token forever on empty pages.
       for (let page = 0; page < 10_000; page += 1) {
         const current = get().preview;
         const pageState = current?.pageState;
@@ -140,7 +174,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
           break;
         }
         const next = await window.cassandraDesk.getPreview(selected, pageState);
-        if (!sameTable(get().selectedTable)) return;
+        if (!sameTable(get().selectedTable, selected)) return;
         const previous = get().preview;
         if (!previous) return;
         const merged: PreviewRowsPayload = {
@@ -150,6 +184,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
         };
         if (next.pageState) merged.pageState = next.pageState;
         set({ preview: merged });
+        setPreviewCache(selected, merged);
       }
     } catch (caught) {
       useStatusStore.getState().setError(caught instanceof Error ? caught.message : String(caught));
@@ -163,28 +198,61 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
     if (!selected) return;
     try {
       const next = await window.cassandraDesk.getPreview(selected);
-      // Skip if the user moved away while the fetch was in flight.
-      const stillSelected = get().selectedTable;
-      if (
-        !stillSelected ||
-        stillSelected.profileId !== selected.profileId ||
-        stillSelected.keyspace !== selected.keyspace ||
-        stillSelected.table !== selected.table
-      ) {
-        return;
-      }
-      // Live polling fires every few seconds; on a static table the returned
-      // rows are byte-identical to what we already hold. Committing a fresh
-      // reference would force TanStack to rebuild every row model (filter,
-      // sort, pagination, selection) and re-render 500+ DOM rows for no gain,
-      // which on release builds was eating ~50% of the main thread and
-      // making the sidebar feel frozen. Cheap deep-equality lets us no-op
-      // when nothing changed.
+      if (!sameTable(get().selectedTable, selected)) return;
       const current = get().preview;
       if (current && previewsEqual(current, next)) return;
       set({ preview: next });
+      setPreviewCache(selected, next);
     } catch {
       // Live polling failures are silent — keep prior preview, surface nothing.
+    }
+  },
+
+  refreshPreviewLive: async () => {
+    const selected = get().selectedTable;
+    const schema = get().schema;
+    if (!selected) return;
+
+    const pkColumns = schema ? [...schema.partitionKeys, ...schema.clusteringKeys] : [];
+    if (pkColumns.length === 0) {
+      // No PK info yet — fall back to the standard silent refresh.
+      return get().refreshPreviewSilent();
+    }
+
+    try {
+      const next = await window.cassandraDesk.getPreview(selected);
+      if (!sameTable(get().selectedTable, selected)) return;
+
+      const current = get().preview;
+      if (!current || current.rows.length === 0) {
+        set({ preview: next });
+        setPreviewCache(selected, next);
+        return;
+      }
+
+      // Build the set of PK fingerprints already in our preview.
+      const existingKeys = new Set(
+        current.rows.map((row) => pkColumns.map((col) => row[col] ?? "").join("\x00"))
+      );
+
+      // Rows from the fresh first-page that aren't already present.
+      const newRows = next.rows.filter(
+        (row) => !existingKeys.has(pkColumns.map((col) => row[col] ?? "").join("\x00"))
+      );
+
+      if (newRows.length === 0) return;
+
+      // Prepend new arrivals at the top; keep all previously-loaded rows intact.
+      const merged: PreviewRowsPayload = {
+        columns: current.columns,
+        rows: [...newRows, ...current.rows],
+        limit: current.limit,
+      };
+      if (current.pageState) merged.pageState = current.pageState;
+      set({ preview: merged });
+      setPreviewCache(selected, merged);
+    } catch {
+      // Silent failure — keep prior preview.
     }
   },
 
@@ -196,8 +264,8 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       preview: undefined,
       tableState: "idle"
     });
-    // Default tab at cluster level should be CQL (Data/Schema/Migrations need a table).
     useLayoutStore.getState().setActiveTab("cql");
+    useLayoutStore.getState().setLastNavigation(profileId, undefined);
     useQueryStore.getState().resetForTable("");
     useStatusStore.getState().setError(undefined);
     void import("./redis").then(({ useRedisStore }) => useRedisStore.getState().clearSelection());
@@ -212,6 +280,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       tableState: "idle"
     });
     useLayoutStore.getState().setActiveTab("data");
+    useLayoutStore.getState().setLastNavigation(undefined);
     useQueryStore.getState().resetForTable("");
     useStatusStore.getState().setError(undefined);
   }
