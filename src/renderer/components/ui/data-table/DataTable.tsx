@@ -9,7 +9,8 @@ import {
   getSortedRowModel,
   useReactTable
 } from "@tanstack/react-table";
-import { memo, useMemo, useState } from "react";
+import { Copy, X } from "lucide-react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { usePreferencesStore } from "../../../store/preferences";
 import { EmptyState } from "../EmptyState";
 import { SkeletonTable } from "../Skeleton";
@@ -69,6 +70,10 @@ function DataTableImpl({
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [expandedRow, setExpandedRow] = useState<Row | null>(null);
+  const handleRowClick = useCallback((row: Row) => {
+    setExpandedRow((prev) => (prev === row ? null : row));
+  }, []);
   const preferredPageSize = usePreferencesStore((state) => state.pageSize);
   const effectivePageSize = pageSize ?? preferredPageSize;
 
@@ -142,7 +147,20 @@ function DataTableImpl({
         {...(toolbarDelete ? { deleteConfig: toolbarDelete } : {})}
       />
 
-      <DataTableBody table={table} columnCount={columns.length} {...(highlightRowIds ? { highlightRowIds } : {})} />
+      <DataTableBody
+        table={table}
+        columnCount={columns.length}
+        onRowClick={handleRowClick}
+        {...(highlightRowIds ? { highlightRowIds } : {})}
+      />
+
+      {expandedRow && result && (
+        <RowDetailPanel
+          row={expandedRow}
+          columns={result.columns}
+          onClose={() => setExpandedRow(null)}
+        />
+      )}
 
       <DataTablePagination table={table} />
 
@@ -160,3 +178,60 @@ function DataTableImpl({
 }
 
 export const DataTable = memo(DataTableImpl);
+
+function RowDetailPanel({
+  row,
+  columns,
+  onClose
+}: {
+  row: Row;
+  columns: string[];
+  onClose(): void;
+}) {
+  return (
+    <div className="flex h-[240px] shrink-0 flex-col border-t border-line bg-panel-soft">
+      <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5">
+        <span className="text-[11px] font-medium text-muted">Row data</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-0.5 text-subtle hover:bg-line-soft hover:text-text"
+          aria-label="Close row detail"
+        >
+          <X size={13} strokeWidth={1.7} />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <table className="w-full border-collapse font-mono text-[11.5px]">
+          <tbody>
+            {columns.map((col) => {
+              const value = row[col] ?? "";
+              return (
+                <tr key={col} className="group border-b border-line-soft/60 last:border-b-0 hover:bg-line-soft/40">
+                  <td className="w-[160px] max-w-[200px] shrink-0 select-none truncate px-3 py-1.5 align-top font-medium text-muted">
+                    {col}
+                  </td>
+                  <td className="px-3 py-1.5 align-top">
+                    <div className="flex items-start gap-2">
+                      <span className="flex-1 break-all text-text">{value === "" ? <span className="text-subtle italic">null</span> : value}</span>
+                      {value !== "" && (
+                        <button
+                          type="button"
+                          onClick={() => void navigator.clipboard.writeText(value)}
+                          className="mt-0.5 shrink-0 rounded p-0.5 text-subtle opacity-0 transition-opacity hover:text-text group-hover:opacity-100"
+                          aria-label={`Copy ${col}`}
+                        >
+                          <Copy size={11} strokeWidth={1.7} />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

@@ -105,6 +105,14 @@ const config = {
     icon: "media/macos/AppIcon512.png",
     target: ["AppImage"],
     category: "Development",
+    // Ubuntu 24.04+ / Debian Trixie enforce AppArmor rules that block
+    // unprivileged user namespaces, causing the setuid chrome-sandbox check to
+    // FATAL-abort even when no-sandbox is set programmatically (the check runs
+    // before app code executes). Baking --no-sandbox into the AppImage wrapper
+    // script ensures the flag is present on the real argv before Electron
+    // initialises, which is the only reliable fix for AppImage distribution.
+    // The renderer is already isolated via contextIsolation + no nodeIntegration.
+    executableArgs: ["--no-sandbox", "--disable-gpu-sandbox"],
   },
 };
 
