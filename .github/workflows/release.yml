@@ -109,6 +109,7 @@ jobs:
         # the macOS release. Undefining them when empty restores the intended
         # ad-hoc signature (identity "-"). When the secrets are present CSC_LINK
         # is non-empty, so this is a no-op and the Developer ID flow runs.
+        shell: bash
         run: |
           if [ -z "$CSC_LINK" ]; then unset CSC_LINK CSC_KEY_PASSWORD; fi
           npx electron-builder ${{ matrix.build_args }} --publish always
