@@ -15,6 +15,9 @@ on:
 permissions:
   contents: write  # required for electron-builder to create/edit the GitHub Release
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build & publish (${{ matrix.os }})
