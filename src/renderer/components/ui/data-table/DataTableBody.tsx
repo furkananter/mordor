@@ -156,7 +156,7 @@ export function DataTableBody({
                   isFresh={highlightRowIds?.has(row.id) ?? false}
                   offsetY={virtualRow.start}
                   tableWidth={tableWidth}
-                  onRowClick={onRowClick}
+                  {...(onRowClick ? { onRowClick } : {})}
                 />
               );
             })
@@ -168,7 +168,7 @@ export function DataTableBody({
                 isSelected={row.getIsSelected()}
                 isFresh={highlightRowIds?.has(row.id) ?? false}
                 tableWidth={tableWidth}
-                onRowClick={onRowClick}
+                {...(onRowClick ? { onRowClick } : {})}
               />
             ))
           )}
