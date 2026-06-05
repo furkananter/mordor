@@ -47,6 +47,10 @@ const config = {
   },
   asar: true,
   files: ["dist/**", "package.json"],
+  // Linux: wrap the product binary so --no-sandbox is applied on every launch
+  // path (direct ./App.AppImage run included), not just the .desktop entry.
+  // See build/after-pack.js for the full rationale.
+  afterPack: "./build/after-pack.js",
   extraResources: [
     {
       from: "media",
@@ -105,14 +109,9 @@ const config = {
     icon: "media/macos/AppIcon512.png",
     target: ["AppImage"],
     category: "Development",
-    // Ubuntu 24.04+ / Debian Trixie enforce AppArmor rules that block
-    // unprivileged user namespaces, causing the setuid chrome-sandbox check to
-    // FATAL-abort even when no-sandbox is set programmatically (the check runs
-    // before app code executes). Baking --no-sandbox into the AppImage wrapper
-    // script ensures the flag is present on the real argv before Electron
-    // initialises, which is the only reliable fix for AppImage distribution.
-    // The renderer is already isolated via contextIsolation + no nodeIntegration.
-    executableArgs: ["--no-sandbox", "--disable-gpu-sandbox"],
+    // The --no-sandbox shim is applied by the afterPack hook above so it covers
+    // direct AppImage execution, not only desktop-entry launches. (executableArgs
+    // alone only patches the .desktop Exec= line and misses ./App.AppImage runs.)
   },
 };
 
