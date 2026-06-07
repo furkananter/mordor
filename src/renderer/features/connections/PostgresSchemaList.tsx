@@ -1,8 +1,16 @@
 import { memo } from "react";
-import { ChevronDown } from "lucide-react";
+import { ChevronDown, Download } from "lucide-react";
 import type { PostgresSchemaNode } from "../../../core/postgres/types";
 import { ProfileListItem } from "../../../core/ipc";
 import { TableIdentity } from "../../../core/shared/messages";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuTrigger
+} from "../../components/ui/ContextMenu";
+import { useExport } from "../export/useExport";
 import { TableRow } from "./TableRow";
 
 /**
@@ -39,18 +47,40 @@ function PostgresSchemaListImpl({
   onOpenTable(table: TableIdentity): Promise<void>;
 }) {
   const childCount = schema.tables.length + schema.views.length;
+  const { runExport, running: exportRunning } = useExport();
+  const handleExportSchema = () => {
+    void runExport({
+      request: {
+        profileId: profile.id,
+        scope: "schema",
+        schema: { keyspace: schema.name },
+      },
+      summary: `Exporting schema ${schema.name} (${profile.name})…`,
+    });
+  };
   return (
     <li>
       <details open className="group/keyspace">
-        <summary className="flex cursor-pointer items-center gap-1.5 rounded-ui px-1.5 py-1 text-[11.5px] text-muted hover:bg-line-soft/60 hover:text-text">
-          <ChevronDown
-            size={11}
-            strokeWidth={1.7}
-            className="shrink-0 transition-transform group-open/keyspace:rotate-0 [details:not([open])>summary>&]:-rotate-90"
-          />
-          <span className="truncate">{schema.name}</span>
-          <span className="ml-auto text-[10.5px] text-subtle">{childCount}</span>
-        </summary>
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <summary className="flex cursor-pointer items-center gap-1.5 rounded-ui px-1.5 py-1 text-[11.5px] text-muted hover:bg-line-soft/60 hover:text-text data-[state=open]:bg-line-soft">
+              <ChevronDown
+                size={11}
+                strokeWidth={1.7}
+                className="shrink-0 transition-transform group-open/keyspace:rotate-0 [details:not([open])>summary>&]:-rotate-90"
+              />
+              <span className="truncate">{schema.name}</span>
+              <span className="ml-auto text-[10.5px] text-subtle">{childCount}</span>
+            </summary>
+          </ContextMenuTrigger>
+          <ContextMenuContent>
+            <ContextMenuLabel>{`${profile.name} / ${schema.name}`}</ContextMenuLabel>
+            <ContextMenuItem onSelect={handleExportSchema} disabled={Boolean(exportRunning)}>
+              <Download size={11} strokeWidth={1.7} className="text-muted" />
+              Export schema…
+            </ContextMenuItem>
+          </ContextMenuContent>
+        </ContextMenu>
         <ul className="ml-3 grid gap-px border-l border-line-soft pl-2">
           {schema.tables.map((table) => {
             const identity: TableIdentity = {

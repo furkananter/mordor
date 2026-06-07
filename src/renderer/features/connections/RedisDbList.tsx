@@ -1,7 +1,15 @@
 import { useEffect, useState } from "react";
-import { Database } from "lucide-react";
+import { Database, Download } from "lucide-react";
 import { RedisDbStat } from "../../../core/ipc";
 import { RedisSelection } from "../../store/redis";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuTrigger
+} from "../../components/ui/ContextMenu";
+import { useExport } from "../export/useExport";
 
 export function RedisDbList({
   profileId,
@@ -47,27 +55,45 @@ export function RedisDbList({
   })();
 
   const hiddenCount = 16 - visibleDbs.length;
+  const { runExport, running: exportRunning } = useExport();
 
   return (
     <>
       {visibleDbs.map((db) => {
         const active = selected?.profileId === profileId && selected.db === db;
         const stat = stats.find((entry) => entry.index === db);
+        const handleExportDb = () => {
+          void runExport({
+            request: { profileId, scope: "full", redisDb: db },
+            summary: `Exporting Redis DB ${db} (${profileName})…`,
+          });
+        };
         return (
           <li key={db}>
-            <button
-              type="button"
-              onClick={() => onSelect({ profileId, profileName, db })}
-              className={`flex w-full items-center gap-1.5 rounded-ui px-1.5 py-1 text-left text-[12px] ${
-                active ? "bg-accent-soft text-accent" : "text-muted hover:bg-line-soft/60 hover:text-text"
-              }`}
-            >
-              <Database size={11} strokeWidth={1.7} className="shrink-0" />
-              <span className="flex-1">DB {db}</span>
-              {stat && stat.keys > 0 ? (
-                <span className="font-mono text-[10.5px] text-subtle">{stat.keys}</span>
-              ) : null}
-            </button>
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => onSelect({ profileId, profileName, db })}
+                  className={`flex w-full items-center gap-1.5 rounded-ui px-1.5 py-1 text-left text-[12px] data-[state=open]:bg-line-soft ${
+                    active ? "bg-accent-soft text-accent" : "text-muted hover:bg-line-soft/60 hover:text-text"
+                  }`}
+                >
+                  <Database size={11} strokeWidth={1.7} className="shrink-0" />
+                  <span className="flex-1">DB {db}</span>
+                  {stat && stat.keys > 0 ? (
+                    <span className="font-mono text-[10.5px] text-subtle">{stat.keys}</span>
+                  ) : null}
+                </button>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuLabel>{`${profileName} / DB ${db}`}</ContextMenuLabel>
+                <ContextMenuItem onSelect={handleExportDb} disabled={Boolean(exportRunning)}>
+                  <Download size={11} strokeWidth={1.7} className="text-muted" />
+                  Export DB…
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           </li>
         );
       })}

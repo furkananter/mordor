@@ -16,6 +16,8 @@ import {
 } from "../shared/messages";
 import { PostgresSchemaNode } from "./types";
 import { serializePostgresRows } from "./serialize";
+import { runPostgresExport } from "./exporter";
+import type { ExportResult } from "../export/types";
 
 export interface PostgresSchemaScriptStatementResult {
   index: number;
@@ -418,6 +420,59 @@ export class PostgresService {
     await Promise.all(
       Array.from(this.connections.keys(), (id) => this.disconnect(id)),
     );
+  }
+
+  /**
+   * Export a single table — schema + rows — into a self-contained folder
+   * under `outputDir`. The folder name is `mordor-pg-<slug>-<timestamp>` so
+   * two exports never collide. Heavy lifting lives in `exporter.ts`; this
+   * method is just a typed entry point.
+   */
+  async exportTable(
+    profileId: string,
+    schema: string,
+    table: string,
+    outputDir: string,
+  ): Promise<ExportResult> {
+    const conn = this.requireConnection(profileId);
+    return runPostgresExport({
+      profileId,
+      profileName: conn.profile.name,
+      client: conn.client,
+      outputDir,
+      schemaFilter: [schema],
+      tableFilter: [{ schema, table }],
+      scopeLabel: `table ${schema}.${table}`,
+    });
+  }
+
+  /** Export every base table + view in a single schema. */
+  async exportSchema(
+    profileId: string,
+    schema: string,
+    outputDir: string,
+  ): Promise<ExportResult> {
+    const conn = this.requireConnection(profileId);
+    return runPostgresExport({
+      profileId,
+      profileName: conn.profile.name,
+      client: conn.client,
+      outputDir,
+      schemaFilter: [schema],
+      scopeLabel: `schema ${schema}`,
+    });
+  }
+
+  /** Export every non-system schema in the connected database. */
+  async exportAll(profileId: string, outputDir: string): Promise<ExportResult> {
+    const conn = this.requireConnection(profileId);
+    return runPostgresExport({
+      profileId,
+      profileName: conn.profile.name,
+      client: conn.client,
+      outputDir,
+      scopeLabel: `full database (${conn.profile.type === "postgres" ? conn.profile.database : ""})`,
+    });
   }
 
   private async fetchSchema(client: pg.Client): Promise<PostgresSchemaNode[]> {

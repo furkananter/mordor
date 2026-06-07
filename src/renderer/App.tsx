@@ -4,6 +4,7 @@ import { ConnectionFormDialog } from "./features/connections/ConnectionFormDialo
 import { Sidebar } from "./features/sidebar/Sidebar";
 import { UpdateBanner } from "./features/updates/UpdateBanner";
 import { TerminalDrawer } from "./features/workspace/TerminalDrawer";
+import { ExportStatusBar } from "./features/export/ExportStatusBar";
 import { WorkspaceHeader } from "./features/workspace/WorkspaceHeader";
 import { WorkspaceRoutes } from "./features/workspace/WorkspaceRoutes";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
@@ -207,6 +208,10 @@ export function App() {
         {/* Update notice renders as a fixed toast (top-right) — no longer in
             normal flow, so it doesn't reflow the workspace when it appears. */}
         <UpdateBanner />
+
+        {/* Export progress / result / error — banner pattern mirrors the
+            error bar below so both live in the same row above the workspace. */}
+        <ExportStatusBar />
 
         {error ? (
           <div className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-[12px] text-danger" role="alert">

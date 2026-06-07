@@ -44,7 +44,13 @@ const api: CassandraDeskApi = {
   getUpdateStatus: vi.fn(() => Promise.resolve({ kind: "idle" as const })),
   checkForUpdates: vi.fn(),
   installUpdate: vi.fn(),
-  onUpdateStatus: vi.fn(() => () => undefined)
+  onUpdateStatus: vi.fn(() => () => undefined),
+  // Export feature — no-op mocks satisfy the CassandraDeskApi interface so
+  // tsc doesn't reject this file before the renderer ever mounts. Export-
+  // specific assertions live in the pure-function tests under `test/`.
+  pickExportFolder: vi.fn(() => Promise.resolve(undefined)),
+  exportDatabase: vi.fn(),
+  openFolder: vi.fn(() => Promise.resolve())
 };
 
 const profile = {
