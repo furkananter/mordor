@@ -7,7 +7,7 @@ import {
   renderCreateTable,
   renderInsert,
   renderSchemaScript,
-} from "../src/core/cassandra/exportRenderer";
+} from "../src/core/cassandra/export-renderer";
 
 const KEYSPACE: CassandraExportKeyspace = {
   name: "app",

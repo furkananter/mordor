@@ -5,7 +5,7 @@ import { CassandraAdapter } from "../adapters/CassandraAdapter";
 import { PostgresAdapter } from "../adapters/PostgresAdapter";
 import { RedisAdapter } from "../adapters/RedisAdapter";
 import { ProfileStore } from "../ProfileStore";
-import { createExportHandlers } from "./exportHandlers";
+import { createExportHandlers } from "./export-handlers";
 import { createMigrationHandlers } from "./migrationHandlers";
 import { createProfileHandlers } from "./profileHandlers";
 import { createRedisHandlers } from "./redisHandlers";

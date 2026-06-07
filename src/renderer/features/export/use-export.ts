@@ -25,7 +25,7 @@
 
 import { useCallback } from "react";
 import type { ExportRequest, ExportResult } from "../../../core/export/types";
-import { useExportStatusStore } from "../../store/exportStatus";
+import { useExportStatusStore } from "../../store/export-status";
 
 export interface RunExportInput {
   /** Pre-built request, minus `outputDir` (which we resolve via the picker). */

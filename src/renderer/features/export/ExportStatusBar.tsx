@@ -12,7 +12,7 @@
 import { useShallow } from "zustand/react/shallow";
 import { Download, FolderOpen, Loader2, X } from "lucide-react";
 import { Button } from "../../components/ui/Button";
-import { useExportStatusStore } from "../../store/exportStatus";
+import { useExportStatusStore } from "../../store/export-status";
 
 export function ExportStatusBar() {
   const { running, lastResult, lastError, dismiss } = useExportStatusStore(

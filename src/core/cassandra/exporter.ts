@@ -23,7 +23,7 @@ import {
   cqlLiteral,
   renderInsert,
   renderSchemaScript,
-} from "./exportRenderer";
+} from "./export-renderer";
 
 const SYSTEM_KEYSPACES = new Set([
   "system",

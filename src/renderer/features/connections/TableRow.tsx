@@ -9,7 +9,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from "../../components/ui/ContextMenu";
-import { useExport } from "../export/useExport";
+import { useExport } from "../export/use-export";
 
 /**
  * Wrapped in React.memo so re-renders triggered higher up the tree (status

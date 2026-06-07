@@ -30,7 +30,7 @@ import {
   RedisScanResult
 } from "../../core/ipc";
 import type { ExportResult } from "../../core/export/types";
-import { runRedisExport } from "./redisExporter";
+import { runRedisExport } from "./redis-exporter";
 
 interface RedisSession {
   client: RedisClient;

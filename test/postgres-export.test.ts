@@ -5,7 +5,7 @@ import {
   renderCreateTable,
   renderInsert,
   renderSchemaScript,
-} from "../src/core/postgres/exportRenderer";
+} from "../src/core/postgres/export-renderer";
 
 const ORDERS_TABLE: PostgresExportTable = {
   schema: "public",

@@ -10,7 +10,7 @@ import {
   ContextMenuLabel,
   ContextMenuTrigger
 } from "../../components/ui/ContextMenu";
-import { useExport } from "../export/useExport";
+import { useExport } from "../export/use-export";
 import { TableRow } from "./TableRow";
 
 /**

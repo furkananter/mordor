@@ -38,7 +38,7 @@ import {
   pgLiteral,
   renderInsert,
   renderSchemaScript,
-} from "./exportRenderer";
+} from "./export-renderer";
 
 const SYSTEM_SCHEMAS = new Set(["pg_catalog", "information_schema", "pg_toast"]);
 
