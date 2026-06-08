@@ -1,6 +1,7 @@
-import { RefreshCw, TerminalSquare } from "lucide-react";
+import { Download, RefreshCw, TerminalSquare } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "../../components/ui/Button";
+import { useExport } from "../export/use-export";
 import { useConnectionStore } from "../../store/connection";
 import { useLayoutStore } from "../../store/layout";
 import { useRedisStore } from "../../store/redis";
@@ -33,6 +34,35 @@ export function WorkspaceHeader({ showSettings }: { showSettings: boolean }) {
     }))
   );
   const redisSelection = useRedisStore((state) => state.selection);
+  const { runExport, running: exportRunning } = useExport();
+
+  // "Export everything" target: pick the most context-rich profile we know
+  // about — the table the user is on > the cluster the redis tree is on >
+  // whichever profile is selected in the sidebar. Disabled when the resolved
+  // profile isn't connected (no live driver session to read from).
+  const exportProfileId =
+    selectedTable?.profileId ?? redisSelection?.profileId ?? selectedProfileId ?? undefined;
+  const exportProfile = exportProfileId
+    ? profiles.find((profile) => profile.id === exportProfileId)
+    : undefined;
+  const canExport = Boolean(exportProfile?.connected) && !exportRunning && !showSettings;
+  const handleExportFull = () => {
+    if (!exportProfile) return;
+    const request: Parameters<typeof runExport>[0]["request"] = {
+      profileId: exportProfile.id,
+      scope: "full",
+    };
+    if (exportProfile.type === "redis") {
+      request.redisDb = redisSelection?.profileId === exportProfile.id ? redisSelection.db : exportProfile.db;
+    }
+    void runExport({
+      request,
+      summary:
+        exportProfile.type === "redis"
+          ? `Exporting Redis DB ${request.redisDb} (${exportProfile.name})…`
+          : `Exporting full ${exportProfile.type} database (${exportProfile.name})…`,
+    });
+  };
 
   const handleReload = async () => {
     const profileId = selectedTable?.profileId ?? selectedProfileId;
@@ -66,6 +96,20 @@ export function WorkspaceHeader({ showSettings }: { showSettings: boolean }) {
           <span className={`h-1.5 w-1.5 rounded-full ${connectedCount > 0 ? "bg-success" : "bg-subtle"}`} />
           {connectedCount} online
         </span>
+        <Button
+          variant="icon"
+          onClick={handleExportFull}
+          disabled={!canExport}
+          tooltip={
+            exportRunning
+              ? "Export in progress"
+              : exportProfile
+                ? `Export ${exportProfile.type === "redis" ? "Redis DB" : "entire database"} (${exportProfile.name})`
+                : "Connect to a database to export"
+          }
+        >
+          <Download size={13} strokeWidth={1.7} />
+        </Button>
         <Button
           variant="icon"
           onClick={toggleTerminal}

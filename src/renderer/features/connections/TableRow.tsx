@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { Copy, Table2 } from "lucide-react";
+import { Copy, Download, Table2 } from "lucide-react";
 import { TableIdentity } from "../../../core/shared/messages";
 import {
   ContextMenu,
@@ -9,6 +9,7 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger
 } from "../../components/ui/ContextMenu";
+import { useExport } from "../export/use-export";
 
 /**
  * Wrapped in React.memo so re-renders triggered higher up the tree (status
@@ -50,6 +51,19 @@ function TableRowImpl({
 }) {
   const qualified = `${keyspace}.${identity.table}`;
   const copy = (value: string) => () => void navigator.clipboard.writeText(value);
+  // Hook is fine inside a memoized component — it subscribes to a single
+  // store slice (`running` for disabling siblings) and a stable action.
+  const { runExport, running: exportRunning } = useExport();
+  const handleExport = () => {
+    void runExport({
+      request: {
+        profileId: identity.profileId,
+        scope: "table",
+        table: { keyspace: identity.keyspace, table: identity.table },
+      },
+      summary: `Exporting ${qualified} (${identity.profileName})…`,
+    });
+  };
   return (
     <li className="tree-row">
       <ContextMenu>
@@ -83,6 +97,11 @@ function TableRowImpl({
           <ContextMenuItem onSelect={copy(`SELECT * FROM ${qualified} LIMIT 100;`)}>
             <Copy size={11} strokeWidth={1.7} className="text-muted" />
             Copy SELECT query
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={handleExport} disabled={Boolean(exportRunning)}>
+            <Download size={11} strokeWidth={1.7} className="text-muted" />
+            Export table…
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
