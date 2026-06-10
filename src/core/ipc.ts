@@ -185,6 +185,7 @@ export interface CassandraDeskApi {
   getPreview(table: TableIdentity, pageState?: string): Promise<PreviewRowsPayload>;
   runSelectQuery(profileId: string, cql: string, mode?: "read" | "write" | "all"): Promise<QueryResultPayload>;
   deleteTableRows(table: TableIdentity, rows: Array<Record<string, string>>): Promise<{ deleted: number }>;
+  insertTableRow(table: TableIdentity, values: Record<string, string>): Promise<{ inserted: number }>;
   getTableDdl(table: TableIdentity): Promise<string>;
   runSchemaScript(profileId: string, cql: string): Promise<SchemaScriptResult>;
   pickMigrationsFolder(): Promise<string | undefined>;
@@ -258,6 +259,7 @@ export const ipcChannels = {
   getPreview: "table:get-preview",
   runSelectQuery: "query:run-select",
   deleteTableRows: "table:delete-rows",
+  insertTableRow: "table:insert-row",
   getTableDdl: "table:get-ddl",
   runSchemaScript: "schema:run-script",
   pickMigrationsFolder: "migrations:pick-folder",

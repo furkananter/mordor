@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronsDown, Radio } from "lucide-react";
+import { ChevronDown, ChevronsDown, Plus, Radio } from "lucide-react";
 import { PreviewRowsPayload, TableSchemaPayload } from "../../../core/shared/messages";
 import { Button } from "../../components/ui/Button";
 import { DataTable, DataTableDeleteConfig } from "../../components/ui/data-table/DataTable";
 import { computeRowId } from "../../components/ui/data-table/types";
 import { PanelHeader } from "../../components/ui/PanelHeader";
+import { InsertRowDialog } from "./InsertRowDialog";
 import { useLivePolling } from "../../hooks/useLivePolling";
 import { LIVE_INTERVAL_OPTIONS_MS, LiveIntervalMs } from "../../store/constants";
 import { usePreferencesStore } from "../../store/preferences";
@@ -24,6 +25,7 @@ export function DataPanel({
 }) {
   const liveIntervalMs = usePreferencesStore((state) => state.liveIntervalMs);
   const setLiveIntervalMs = usePreferencesStore((state) => state.setLiveIntervalMs);
+  const queryMode = usePreferencesStore((state) => state.queryMode);
   const reloadSelectedTable = useSchemaStore((state) => state.reloadSelectedTable);
   const refreshPreviewLive = useSchemaStore((state) => state.refreshPreviewLive);
   const loadMorePreview = useSchemaStore((state) => state.loadMorePreview);
@@ -32,13 +34,22 @@ export function DataPanel({
   const previewLoadingAll = useSchemaStore((state) => state.previewLoadingAll);
   const setError = useStatusStore((state) => state.setError);
   const [liveEnabled, setLiveEnabled] = useState(false);
+  const [insertOpen, setInsertOpen] = useState(false);
+  const canWrite = queryMode !== "read";
 
   const tableKey = schema
     ? `${schema.table.profileId}:${schema.table.keyspace}.${schema.table.table}`
     : undefined;
 
-  // Track which row IDs arrived since the previous tick. Resets on table change / live toggle off.
-  const baselineIdsRef = useRef<Set<string> | undefined>(undefined);
+  // Snapshot of the previous tick keyed by row id → a signature of the row's
+  // cell values. Lets us flag both rows that are *new* (id not seen before) and
+  // rows that were *updated* in place (same id, changed signature). Resets on
+  // table change / live toggle off.
+  const baselineRef = useRef<Map<string, string> | undefined>(undefined);
+  // The column list the baseline signatures were built from. When it changes
+  // (e.g. an ALTER TABLE … ADD between ticks) every signature would differ and
+  // the whole table would flash — so we rebaseline silently instead.
+  const baselineColumnsRef = useRef<string>("");
   const freshRowsRef = useRef<Map<string, number>>(new Map());
   const [freshIds, setFreshIds] = useState<ReadonlySet<string>>(new Set());
 
@@ -47,7 +58,8 @@ export function DataPanel({
     setLiveEnabled(false);
     freshRowsRef.current = new Map();
     setFreshIds(new Set());
-    baselineIdsRef.current = undefined;
+    baselineRef.current = undefined;
+    baselineColumnsRef.current = "";
   }, [tableKey]);
 
   const { lastTickAt, pending } = useLivePolling({
@@ -62,31 +74,46 @@ export function DataPanel({
     [schema]
   );
 
-  // Diff each incoming preview against the previous snapshot. New row IDs get a TTL,
-  // then expire — so highlights fade after FRESH_TTL_MS.
+  // Diff each incoming preview against the previous snapshot. Rows that are new
+  // *or* changed in place get a TTL, then expire — so highlights fade after
+  // FRESH_TTL_MS.
   useEffect(() => {
     if (!liveEnabled || !preview || pkColumnsForDiff.length === 0) {
-      baselineIdsRef.current = undefined;
+      baselineRef.current = undefined;
+      baselineColumnsRef.current = "";
       if (freshRowsRef.current.size > 0) {
         freshRowsRef.current = new Map();
         setFreshIds(new Set());
       }
       return;
     }
-    const currentIds = new Set(preview.rows.map((row, index) => computeRowId(row, pkColumnsForDiff, index)));
-    if (baselineIdsRef.current === undefined) {
-      baselineIdsRef.current = currentIds;
+    const columns = preview.columns;
+    const columnsKey = columns.join("");
+    const current = new Map<string, string>();
+    for (let index = 0; index < preview.rows.length; index += 1) {
+      const row = preview.rows[index]!;
+      const id = computeRowId(row, pkColumnsForDiff, index);
+      current.set(id, rowSignature(row, columns));
+    }
+    // First tick, or the column set changed (signatures aren't comparable
+    // across different column lists) — establish a fresh baseline, no flash.
+    if (baselineRef.current === undefined || baselineColumnsRef.current !== columnsKey) {
+      baselineRef.current = current;
+      baselineColumnsRef.current = columnsKey;
       return;
     }
+    const previousSnapshot = baselineRef.current;
     const now = Date.now();
     let mutated = false;
-    for (const id of currentIds) {
-      if (!baselineIdsRef.current.has(id)) {
+    for (const [id, signature] of current) {
+      const previousSignature = previousSnapshot.get(id);
+      // New row, or an existing row whose cell values changed.
+      if (previousSignature === undefined || previousSignature !== signature) {
         freshRowsRef.current.set(id, now + FRESH_TTL_MS);
         mutated = true;
       }
     }
-    baselineIdsRef.current = currentIds;
+    baselineRef.current = current;
     if (mutated) setFreshIds(new Set(freshRowsRef.current.keys()));
   }, [preview, liveEnabled, pkColumnsForDiff]);
 
@@ -152,6 +179,16 @@ export function DataPanel({
         meta={meta}
         actions={
           <div className="flex items-center gap-2">
+            {schema ? (
+              <Button
+                onClick={() => setInsertOpen(true)}
+                disabled={!canWrite}
+                tooltip={canWrite ? "Insert a row using the table schema" : "Enable Write or All mode in Settings to insert"}
+              >
+                <Plus size={12} strokeWidth={1.7} />
+                <span>Add row</span>
+              </Button>
+            ) : null}
             {hasMore ? (
               <>
                 <Button
@@ -220,6 +257,14 @@ export function DataPanel({
         {...(liveEnabled && freshIds.size > 0 ? { highlightRowIds: freshIds } : {})}
         {...(deleteConfig ? { deleteConfig } : {})}
       />
+      {schema ? (
+        <InsertRowDialog
+          open={insertOpen}
+          schema={schema}
+          onOpenChange={setInsertOpen}
+          onInserted={() => void reloadSelectedTable()}
+        />
+      ) : null}
     </section>
   );
 }
@@ -263,6 +308,22 @@ function LivePulse({ pending }: { pending: boolean }) {
       <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-success" />
     </span>
   );
+}
+
+/**
+ * A cheap content fingerprint for a row: every cell value joined with a
+ * separator that can't appear inside the serialized strings. Comparing these
+ * across live-poll ticks tells an in-place UPDATE (same primary key, different
+ * values) apart from an unchanged row.
+ */
+function rowSignature(row: Record<string, string>, columns: string[]): string {
+  const parts: string[] = [];
+  for (let i = 0; i < columns.length; i += 1) {
+    parts.push(row[columns[i]!] ?? "");
+  }
+  // U+0001 can't occur in the serialized cell strings, so it's a safe field
+  // boundary that keeps ["ab","c"] distinct from ["a","bc"].
+  return parts.join("\u0001");
 }
 
 function formatLastTick(lastTickAt: number | undefined): string {

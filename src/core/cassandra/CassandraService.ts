@@ -202,7 +202,14 @@ export class CassandraService {
     const existing = this.requireConnection(table.profileId);
     const query = buildTablePreviewQuery(table.keyspace, table.table);
     const options: cassandra.QueryOptions = {
-      prepare: true,
+      // Deliberately NOT prepared. A prepared `SELECT *` freezes its result
+      // metadata (the column list) at prepare time and caches it for the life
+      // of the connection. After an ALTER TABLE … ADD, the cached statement
+      // keeps returning the old columns until the connection is rebuilt — which
+      // is exactly the "I updated the table but only restarting the app shows
+      // it" bug. The query carries no bind parameters, so preparing buys us
+      // nothing here; running it unprepared re-resolves the columns every time.
+      prepare: false,
       fetchSize: previewLimit,
     };
     // Forward the previous page's continuation token when paging through a
@@ -340,14 +347,30 @@ export class CassandraService {
     return result;
   }
 
+  /**
+   * Shared setup for write paths (delete/insert): grab the live connection,
+   * read the table schema once, and pre-compute the column→type map and the
+   * ordered primary-key column list. Keeps deleteRows and insertRow from
+   * re-deriving (and drifting on) the same scaffolding.
+   */
+  private async resolveWriteContext(table: TableIdentity): Promise<{
+    existing: ActiveConnection;
+    typeByColumn: Map<string, string>;
+    keyColumns: string[];
+  }> {
+    const existing = this.requireConnection(table.profileId);
+    const schema = await this.fetchTableSchema(table);
+    const typeByColumn = new Map(schema.columns.map((column) => [column.name, column.type]));
+    const keyColumns = [...schema.partitionKeys, ...schema.clusteringKeys];
+    return { existing, typeByColumn, keyColumns };
+  }
+
   async deleteRows(
     table: TableIdentity,
     rows: Array<Record<string, string>>,
   ): Promise<{ deleted: number }> {
     if (rows.length === 0) return { deleted: 0 };
-    const existing = this.requireConnection(table.profileId);
-    const schema = await this.fetchTableSchema(table);
-    const keyColumns = [...schema.partitionKeys, ...schema.clusteringKeys];
+    const { existing, typeByColumn, keyColumns } = await this.resolveWriteContext(table);
     if (keyColumns.length === 0) {
       throw new Error(
         `Cannot delete rows from ${table.keyspace}.${table.table}: no primary key columns found.`,
@@ -363,9 +386,8 @@ export class CassandraService {
           .join(", ")}).`,
       );
     }
-    const typeByColumn = new Map(schema.columns.map((column) => [column.name, column.type]));
-    const whereClause = keyColumns.map((column) => `"${column}" = ?`).join(" AND ");
-    const cql = `DELETE FROM "${table.keyspace}"."${table.table}" WHERE ${whereClause}`;
+    const whereClause = keyColumns.map((column) => `${quoteIdentifier(column)} = ?`).join(" AND ");
+    const cql = `DELETE FROM ${quoteIdentifier(table.keyspace)}.${quoteIdentifier(table.table)} WHERE ${whereClause}`;
     const queries = rows.map((row) => ({
       query: cql,
       params: keyColumns.map((column) => coerceForCassandra(row[column] ?? "", typeByColumn.get(column) ?? "text")),
@@ -378,6 +400,53 @@ export class CassandraService {
       await existing.client.batch(queries.slice(i, i + BATCH_CHUNK), { prepare: true, logged: true });
     }
     return { deleted: rows.length };
+  }
+
+  /**
+   * Insert a single row built from a schema-aware form in the renderer. Only
+   * the columns the user actually filled in are written — everything else is
+   * left unset (Cassandra treats an absent column as null), so defaults and
+   * TTLs behave as expected. Every value is bound as a prepared parameter and
+   * coerced to its CQL type, so quotes/UUIDs/numbers don't have to be escaped
+   * by hand.
+   */
+  async insertRow(
+    table: TableIdentity,
+    values: Record<string, string>,
+  ): Promise<{ inserted: number }> {
+    const { existing, typeByColumn, keyColumns } = await this.resolveWriteContext(table);
+    // Keep only the columns the user gave a value for. Empty inputs are dropped
+    // rather than written as null so the row stays minimal.
+    const columns = Object.keys(values).filter((column) => (values[column] ?? "").trim() !== "");
+    // A non-empty value for a column the table doesn't have means the caller's
+    // schema is stale (the dialog was opened before an ALTER). Fail fast so the
+    // user refreshes, instead of silently inserting a partial row.
+    const unknownColumns = columns.filter((column) => !typeByColumn.has(column));
+    if (unknownColumns.length > 0) {
+      throw new Error(
+        `Cannot insert into ${table.keyspace}.${table.table}: unknown column(s) — ${unknownColumns.join(", ")}. Refresh the schema and try again.`,
+      );
+    }
+    // Trim matches the renderer's own required-field check so a whitespace-only
+    // key is rejected here with a clear message instead of failing deep in the
+    // driver's type coercion.
+    const missingKeys = keyColumns.filter((column) => (values[column] ?? "").trim() === "");
+    if (missingKeys.length > 0) {
+      throw new Error(
+        `Cannot insert into ${table.keyspace}.${table.table}: primary key column(s) required — ${missingKeys.join(", ")}.`,
+      );
+    }
+    if (columns.length === 0) {
+      throw new Error("No column values provided to insert.");
+    }
+    const params = columns.map((column) =>
+      coerceForCassandra(values[column] ?? "", typeByColumn.get(column) ?? "text"),
+    );
+    const colList = columns.map((column) => quoteIdentifier(column)).join(", ");
+    const placeholders = columns.map(() => "?").join(", ");
+    const cql = `INSERT INTO ${quoteIdentifier(table.keyspace)}.${quoteIdentifier(table.table)} (${colList}) VALUES (${placeholders})`;
+    await existing.client.execute(cql, params, { prepare: true });
+    return { inserted: 1 };
   }
 
   async runSelectQuery(
@@ -546,23 +615,43 @@ export class CassandraService {
 function coerceForCassandra(raw: string, cqlType: string): unknown {
   const type = cqlType.toLowerCase().trim();
   if (raw === "") return null;
+  // Collections, tuples, and UDTs are entered as JSON in the insert form
+  // (e.g. ["a","b"] for list<text>, {"k":"v"} for map<text,text>). The driver
+  // encodes a JS array/object straight into the collection; without this the
+  // raw string would reach the prepared encoder and throw a type error.
   if (
-    type === "int" ||
-    type === "smallint" ||
-    type === "tinyint" ||
-    type === "varint" ||
-    type === "counter"
+    type.startsWith("list<") ||
+    type.startsWith("set<") ||
+    type.startsWith("map<") ||
+    type.startsWith("tuple<") ||
+    type.startsWith("frozen<")
   ) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(
+        `Invalid ${cqlType} value — enter JSON (e.g. ["a","b"] or {"k":"v"}): ${raw}`,
+      );
+    }
+  }
+  // Only the fixed-width integer types are safe to parse via Number; varint and
+  // counter can exceed Number.MAX_SAFE_INTEGER and would silently lose precision.
+  if (type === "int" || type === "smallint" || type === "tinyint") {
     const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) throw new Error(`Invalid integer value for ${cqlType}: ${raw}`);
+    if (!Number.isInteger(parsed)) throw new Error(`Invalid integer value for ${cqlType}: ${raw}`);
     return parsed;
   }
   // From here on we touch the driver's type helpers. Safe to use driverSync()
   // because deleteRows/runQuery are only callable after a successful connect,
   // which loaded the driver module.
   const types = driverSync().types;
-  if (type === "bigint") {
+  if (type === "bigint" || type === "counter") {
+    // Long is the arbitrary-width 64-bit carrier the driver expects for both.
     return types.Long.fromString(raw);
+  }
+  if (type === "varint") {
+    // varint is unbounded; Integer preserves the full magnitude.
+    return types.Integer.fromString(raw);
   }
   if (type === "double" || type === "float" || type === "decimal") {
     const parsed = Number(raw);

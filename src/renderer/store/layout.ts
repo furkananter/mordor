@@ -7,6 +7,9 @@ import {
   MIGRATION_DRAWER_DEFAULT_WIDTH,
   MIGRATION_DRAWER_MAX_WIDTH,
   MIGRATION_DRAWER_MIN_WIDTH,
+  ROW_DETAIL_DEFAULT_HEIGHT,
+  ROW_DETAIL_MAX_HEIGHT,
+  ROW_DETAIL_MIN_HEIGHT,
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_MAX_WIDTH,
   SIDEBAR_MIN_WIDTH,
@@ -26,6 +29,8 @@ interface LayoutState {
   terminalOpen: boolean;
   terminalHeight: number;
   cqlEditorHeight: number;
+  /** Height of the expandable "Row data" detail panel under the data table. */
+  rowDetailHeight: number;
   /** Last profile the user navigated to — restored on next app open. */
   lastProfileId: string | undefined;
   /** Last table the user had open — restored if the profile reconnects. */
@@ -41,6 +46,7 @@ interface LayoutActions {
   setTerminalOpen(open: boolean): void;
   setTerminalHeight(height: number): void;
   setCqlEditorHeight(height: number): void;
+  setRowDetailHeight(height: number): void;
   setLastNavigation(profileId: string | undefined, table?: TableIdentity): void;
 }
 
@@ -54,6 +60,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
       terminalOpen: false,
       terminalHeight: TERMINAL_DEFAULT_HEIGHT,
       cqlEditorHeight: CQL_EDITOR_DEFAULT_HEIGHT,
+      rowDetailHeight: ROW_DETAIL_DEFAULT_HEIGHT,
       lastProfileId: undefined,
       lastTable: undefined,
 
@@ -93,6 +100,14 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
             CQL_EDITOR_MAX_HEIGHT,
           ),
         }),
+      setRowDetailHeight: (height) =>
+        set({
+          rowDetailHeight: clamp(
+            height,
+            ROW_DETAIL_MIN_HEIGHT,
+            ROW_DETAIL_MAX_HEIGHT,
+          ),
+        }),
     }),
     {
       name: "mordor-layout",
@@ -102,6 +117,7 @@ export const useLayoutStore = create<LayoutState & LayoutActions>()(
         migrationsDrawerWidth: state.migrationsDrawerWidth,
         terminalHeight: state.terminalHeight,
         cqlEditorHeight: state.cqlEditorHeight,
+        rowDetailHeight: state.rowDetailHeight,
         activeTab: state.activeTab,
         lastProfileId: state.lastProfileId,
         lastTable: state.lastTable,

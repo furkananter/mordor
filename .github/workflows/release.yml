@@ -40,20 +40,20 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
-    # macOS code signing + notarization credentials, scoped to the mac job via
-    # the matrix guard so the Developer ID .p12 in CSC_LINK never reaches the
-    # Windows/Linux runners (electron-builder would otherwise try to sign those
-    # with it and fail). Set at the job level — not just on the publish step — so
-    # the "Build app bundle" step sees CSC_LINK too and bakes the matching
-    # `__MAC_SIGNED__` flag into the bundle. When the secrets aren't configured
-    # yet these resolve to empty strings and electron-builder produces the same
-    # ad-hoc build as before.
+    # Signing secrets exposed under SIGN_* names that electron-builder does NOT
+    # read. The "Configure macOS signing" step below promotes them to the real
+    # CSC_LINK / APPLE_* names ONLY when a certificate is actually present.
+    # This indirection is deliberate: an empty-but-defined CSC_LINK makes
+    # electron-builder enter the certificate-signing path and fail ("not a
+    # file"), so for unsigned (ad-hoc) builds CSC_LINK must be left UNSET, not
+    # set to "". On non-mac runners the promotion step is skipped, so the mac
+    # .p12 never reaches the Windows/Linux signers.
     env:
-      CSC_LINK: ${{ matrix.os == 'macos-latest' && secrets.MAC_CSC_LINK || '' }}
-      CSC_KEY_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
-      APPLE_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_ID || '' }}
-      APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.os == 'macos-latest' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-      APPLE_TEAM_ID: ${{ matrix.os == 'macos-latest' && secrets.APPLE_TEAM_ID || '' }}
+      SIGN_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+      SIGN_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+      SIGN_APPLE_ID: ${{ secrets.APPLE_ID }}
+      SIGN_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      SIGN_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +74,23 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # Promote the signing secrets to the env names electron-builder reads, but
+      # ONLY on macOS AND only when a Developer ID certificate is configured.
+      # Leaving CSC_LINK unset for unsigned builds is required (see env note
+      # above). Running before "Build app bundle" also lets esbuild bake the
+      # matching __MAC_SIGNED__ flag, since build-main.mjs keys it on CSC_LINK.
+      - name: Configure macOS signing
+        if: matrix.os == 'macos-latest' && env.SIGN_CSC_LINK != ''
+        run: |
+          {
+            echo "CSC_LINK=$SIGN_CSC_LINK"
+            echo "CSC_KEY_PASSWORD=$SIGN_CSC_KEY_PASSWORD"
+            echo "APPLE_ID=$SIGN_APPLE_ID"
+            echo "APPLE_APP_SPECIFIC_PASSWORD=$SIGN_APPLE_APP_SPECIFIC_PASSWORD"
+            echo "APPLE_TEAM_ID=$SIGN_APPLE_TEAM_ID"
+          } >> "$GITHUB_ENV"
+          echo "Developer ID certificate detected — signing + notarization enabled."
 
       # Run our own pre-publish guards so a broken build never gets to the
       # publish step. Cheap: 1-2 minutes on Node 22.

@@ -9,9 +9,11 @@ import {
   getSortedRowModel,
   useReactTable
 } from "@tanstack/react-table";
-import { Copy, X } from "lucide-react";
-import { memo, useCallback, useMemo, useState } from "react";
+import { Copy, Maximize2, Minimize2, X } from "lucide-react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { usePreferencesStore } from "../../../store/preferences";
+import { useLayoutStore } from "../../../store/layout";
+import { ROW_DETAIL_MAX_HEIGHT } from "../../../store/constants";
 import { EmptyState } from "../EmptyState";
 import { SkeletonTable } from "../Skeleton";
 import { DataTableBody } from "./DataTableBody";
@@ -70,10 +72,25 @@ function DataTableImpl({
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [expandedRow, setExpandedRow] = useState<Row | null>(null);
-  const handleRowClick = useCallback((row: Row) => {
-    setExpandedRow((prev) => (prev === row ? null : row));
-  }, []);
+  // Track the expanded row by a stable key (its primary key when available),
+  // not by object reference. Live-mode refreshes replace every row object, so a
+  // reference would either drop the panel or, worse, keep showing a stale
+  // snapshot — keying by id lets us re-resolve the current row each render.
+  const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
+  const rowKeyOf = useCallback(
+    (row: Row) =>
+      rowIdColumns && rowIdColumns.length > 0
+        ? computeRowId(row, rowIdColumns, JSON.stringify(row))
+        : JSON.stringify(row),
+    [rowIdColumns]
+  );
+  const handleRowClick = useCallback(
+    (row: Row) => {
+      const key = rowKeyOf(row);
+      setExpandedRowKey((prev) => (prev === key ? null : key));
+    },
+    [rowKeyOf]
+  );
   const preferredPageSize = usePreferencesStore((state) => state.pageSize);
   const effectivePageSize = pageSize ?? preferredPageSize;
 
@@ -106,6 +123,14 @@ function DataTableImpl({
   });
 
   const selectedRowsCount = useMemo(() => Object.values(rowSelection).filter(Boolean).length, [rowSelection]);
+
+  // Resolve the live row object for the expanded key on every render, so the
+  // detail panel always reflects the latest values (and closes itself if the
+  // row disappears after a filter or live refresh).
+  const expandedRow = useMemo(() => {
+    if (!expandedRowKey || !result) return null;
+    return result.rows.find((row) => rowKeyOf(row) === expandedRowKey) ?? null;
+  }, [expandedRowKey, result, rowKeyOf]);
 
   if (loading) {
     return <SkeletonTable rows={Math.min(effectivePageSize, 12)} columns={result?.columns.length ?? 5} />;
@@ -158,7 +183,8 @@ function DataTableImpl({
         <RowDetailPanel
           row={expandedRow}
           columns={result.columns}
-          onClose={() => setExpandedRow(null)}
+          {...(columnTypes ? { columnTypes } : {})}
+          onClose={() => setExpandedRowKey(null)}
         />
       )}
 
@@ -182,38 +208,105 @@ export const DataTable = memo(DataTableImpl);
 function RowDetailPanel({
   row,
   columns,
+  columnTypes,
   onClose
 }: {
   row: Row;
   columns: string[];
+  columnTypes?: Record<string, string> | undefined;
   onClose(): void;
 }) {
+  const height = useLayoutStore((state) => state.rowDetailHeight);
+  const setHeight = useLayoutStore((state) => state.setRowDetailHeight);
+  const [resizing, setResizing] = useState(false);
+  // Remembers the pre-maximize height so the toggle can restore it.
+  const restoreRef = useRef<number | null>(null);
+  const maximized = height >= ROW_DETAIL_MAX_HEIGHT;
+
+  // Drag the top edge to resize. Dragging up grows the panel (its bottom edge
+  // is pinned above the pagination bar), so height = startHeight + (startY−y).
+  const handleResizeStart = (event: React.MouseEvent) => {
+    event.preventDefault();
+    setResizing(true);
+    const startY = event.clientY;
+    const startHeight = height;
+    const onMove = (move: MouseEvent) => setHeight(startHeight + (startY - move.clientY));
+    const onUp = () => {
+      setResizing(false);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const toggleMaximize = () => {
+    if (maximized) {
+      setHeight(restoreRef.current ?? ROW_DETAIL_MAX_HEIGHT / 2);
+    } else {
+      restoreRef.current = height;
+      setHeight(ROW_DETAIL_MAX_HEIGHT);
+    }
+  };
+
   return (
-    <div className="flex h-[240px] shrink-0 flex-col border-t border-line bg-panel-soft">
+    <div style={{ height }} className="relative flex shrink-0 flex-col border-t border-line bg-panel-soft">
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize row data panel"
+        onMouseDown={handleResizeStart}
+        onDoubleClick={toggleMaximize}
+        data-active={resizing ? "true" : "false"}
+        className="absolute left-0 right-0 top-0 z-10 h-1.5 -translate-y-1/2 cursor-row-resize bg-transparent transition-colors hover:bg-accent/60 data-[active=true]:bg-accent"
+      />
       <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5">
         <span className="text-[11px] font-medium text-muted">Row data</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded p-0.5 text-subtle hover:bg-line-soft hover:text-text"
-          aria-label="Close row detail"
-        >
-          <X size={13} strokeWidth={1.7} />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
+            onClick={toggleMaximize}
+            className="rounded p-0.5 text-subtle hover:bg-line-soft hover:text-text"
+            aria-label={maximized ? "Restore row detail height" : "Maximize row detail"}
+            title={maximized ? "Restore" : "Expand"}
+          >
+            {maximized ? <Minimize2 size={12} strokeWidth={1.7} /> : <Maximize2 size={12} strokeWidth={1.7} />}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-0.5 text-subtle hover:bg-line-soft hover:text-text"
+            aria-label="Close row detail"
+          >
+            <X size={13} strokeWidth={1.7} />
+          </button>
+        </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         <table className="w-full border-collapse font-mono text-[11.5px]">
           <tbody>
             {columns.map((col) => {
               const value = row[col] ?? "";
+              const structured = parseStructured(value);
               return (
                 <tr key={col} className="group border-b border-line-soft/60 last:border-b-0 hover:bg-line-soft/40">
-                  <td className="w-[160px] max-w-[200px] shrink-0 select-none truncate px-3 py-1.5 align-top font-medium text-muted">
-                    {col}
+                  <td className="w-[160px] max-w-[200px] shrink-0 select-none px-3 py-1.5 align-top font-medium text-muted">
+                    <div className="truncate">{col}</div>
+                    {columnTypes?.[col] ? (
+                      <div className="truncate text-[10px] text-subtle">{columnTypes[col]}</div>
+                    ) : null}
                   </td>
                   <td className="px-3 py-1.5 align-top">
                     <div className="flex items-start gap-2">
-                      <span className="flex-1 break-all text-text">{value === "" ? <span className="text-subtle italic">null</span> : value}</span>
+                      <div className="min-w-0 flex-1">
+                        {value === "" ? (
+                          <span className="italic text-subtle">null</span>
+                        ) : structured !== undefined ? (
+                          <JsonView value={structured} />
+                        ) : (
+                          <span className="whitespace-pre-wrap break-all text-text">{value}</span>
+                        )}
+                      </div>
                       {value !== "" && (
                         <button
                           type="button"
@@ -234,4 +327,57 @@ function RowDetailPanel({
       </div>
     </div>
   );
+}
+
+/**
+ * Renders a parsed JSON value as an indented tree. Cassandra maps/lists/sets
+ * and Postgres json/jsonb columns arrive as serialized strings; this is the
+ * shared structured view for them. Dependency free and recursive.
+ */
+function JsonView({ value, depth = 0 }: { value: unknown; depth?: number }) {
+  if (value === null) return <span className="text-subtle">null</span>;
+  if (typeof value === "string") return <span className="text-success">&quot;{value}&quot;</span>;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return <span className="text-accent">{String(value)}</span>;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="text-muted">[]</span>;
+    return (
+      <div className="grid">
+        {value.map((entry, i) => (
+          <div key={i} style={{ paddingLeft: depth > 0 ? 12 : 0 }} className="flex gap-1.5">
+            <span className="shrink-0 text-subtle">{i}:</span>
+            <JsonView value={entry} depth={depth + 1} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.length === 0) return <span className="text-muted">{"{}"}</span>;
+  return (
+    <div className="grid">
+      {entries.map(([key, entry]) => (
+        <div key={key} style={{ paddingLeft: depth > 0 ? 12 : 0 }} className="flex gap-1.5">
+          <span className="shrink-0 text-muted">{key}:</span>
+          <JsonView value={entry} depth={depth + 1} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Returns the parsed object/array when `value` is JSON describing one, else
+ * undefined (so scalars and plain strings render as text, not quoted JSON).
+ */
+function parseStructured(value: string): unknown {
+  const trimmed = value.trim();
+  if (!(trimmed.startsWith("{") || trimmed.startsWith("["))) return undefined;
+  try {
+    const parsed = JSON.parse(trimmed);
+    return parsed !== null && typeof parsed === "object" ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
 }

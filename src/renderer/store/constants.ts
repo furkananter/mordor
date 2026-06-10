@@ -40,6 +40,10 @@ export const CQL_EDITOR_MIN_HEIGHT = 120;
 export const CQL_EDITOR_MAX_HEIGHT = 640;
 export const CQL_EDITOR_DEFAULT_HEIGHT = 240;
 
+export const ROW_DETAIL_MIN_HEIGHT = 140;
+export const ROW_DETAIL_MAX_HEIGHT = 720;
+export const ROW_DETAIL_DEFAULT_HEIGHT = 240;
+
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }

@@ -99,6 +99,15 @@ export function createSchemaHandlers(
       // DELETE from the wrong cluster.
       throw unsupported("deleteTableRows", profile);
     },
+    [ipcChannels.insertTableRow]: async (
+      table: TableIdentity,
+      values: Record<string, string>,
+    ) => {
+      const profile = await requireProfile(table.profileId);
+      if (profile.type === "cassandra") return cassandra.insertRow(table, values);
+      if (profile.type === "postgres") return postgres.insertRow(table, values);
+      throw unsupported("insertTableRow", profile);
+    },
     [ipcChannels.getTableDdl]: async (table: TableIdentity) => {
       const profile = await requireProfile(table.profileId);
       if (profile.type === "cassandra") return cassandra.fetchTableDdl(table);

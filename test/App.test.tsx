@@ -17,6 +17,7 @@ const api: CassandraDeskApi = {
   getPreview: vi.fn(),
   runSelectQuery: vi.fn(),
   deleteTableRows: vi.fn(),
+  insertTableRow: vi.fn(),
   getTableDdl: vi.fn(),
   runSchemaScript: vi.fn(),
   pickMigrationsFolder: vi.fn(),
