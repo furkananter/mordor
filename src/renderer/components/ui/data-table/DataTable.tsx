@@ -17,6 +17,7 @@ import { DataTableBody } from "./DataTableBody";
 import { DataTableFilters } from "./DataTableFilters";
 import { DataTablePagination } from "./DataTablePagination";
 import { DataTableToolbar, ToolbarDeleteConfig } from "./DataTableToolbar";
+import { RowDetailDrawer } from "./RowDetailDrawer";
 import { computeRowId, DataTablePayload, Row } from "./types";
 import { useDataTableColumns } from "./useDataTableColumns";
 
@@ -48,7 +49,9 @@ function DataTableImpl({
   enableSelection = false,
   deleteConfig,
   rowIdColumns,
-  highlightRowIds
+  highlightRowIds,
+  enableRowDetail = true,
+  detailTitle
 }: {
   result: DataTablePayload | undefined;
   loading: boolean;
@@ -63,12 +66,17 @@ function DataTableImpl({
   rowIdColumns?: string[];
   /** Row IDs to render with a highlight (e.g. recently arrived in live mode). */
   highlightRowIds?: ReadonlySet<string>;
+  /** When true (default), clicking a row opens the full-row detail drawer. */
+  enableRowDetail?: boolean;
+  /** Heading shown atop the row detail drawer (e.g. the table name). */
+  detailTitle?: string;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const [detailIndex, setDetailIndex] = useState<number | null>(null);
   const preferredPageSize = usePreferencesStore((state) => state.pageSize);
   const effectivePageSize = pageSize ?? preferredPageSize;
 
@@ -112,6 +120,7 @@ function DataTableImpl({
     return <EmptyState title="No rows" body={emptyRowsBody} compact />;
   }
 
+  const displayedRows = table.getRowModel().rows;
   const filteredCount = table.getFilteredRowModel().rows.length;
   const toolbarDelete: ToolbarDeleteConfig | undefined = deleteConfig
     ? {
@@ -142,7 +151,12 @@ function DataTableImpl({
         {...(toolbarDelete ? { deleteConfig: toolbarDelete } : {})}
       />
 
-      <DataTableBody table={table} columnCount={columns.length} {...(highlightRowIds ? { highlightRowIds } : {})} />
+      <DataTableBody
+        table={table}
+        columnCount={columns.length}
+        {...(highlightRowIds ? { highlightRowIds } : {})}
+        {...(enableRowDetail ? { onRowOpen: setDetailIndex } : {})}
+      />
 
       <DataTablePagination table={table} />
 
@@ -155,6 +169,18 @@ function DataTableImpl({
         onClose={() => setFiltersOpen(false)}
         onClearAll={() => setColumnFilters([])}
       />
+
+      {enableRowDetail && detailIndex !== null && displayedRows[detailIndex] ? (
+        <RowDetailDrawer
+          rows={displayedRows.map((row) => row.original)}
+          index={detailIndex}
+          columns={result.columns}
+          {...(columnTypes ? { columnTypes } : {})}
+          {...(detailTitle ? { title: detailTitle } : {})}
+          onNavigate={setDetailIndex}
+          onClose={() => setDetailIndex(null)}
+        />
+      ) : null}
     </div>
   );
 }

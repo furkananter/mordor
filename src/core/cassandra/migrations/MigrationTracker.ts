@@ -16,6 +16,18 @@ interface ApplyOutcome {
   total?: number;
 }
 
+/** Columns Mordor reads from / writes to the tracking table. */
+const REQUIRED_TRACKING_COLUMNS = [
+  "version",
+  "filename",
+  "checksum",
+  "applied_at",
+  "success",
+  "error_message"
+] as const;
+
+export type TrackingTableStatus = "absent" | "compatible" | "incompatible";
+
 export class MigrationTracker {
   async hasTrackingTable(client: cassandra.Client, keyspace: string): Promise<boolean> {
     const result = await client.execute(
@@ -26,7 +38,45 @@ export class MigrationTracker {
     return result.rows.length > 0;
   }
 
+  /**
+   * A `schema_migrations` table is an extremely common name — golang-migrate,
+   * Flyway, Liquibase, Rails, and others all reach for it, each with their own
+   * column layout. If one of those already lives in the target keyspace, our
+   * `CREATE TABLE IF NOT EXISTS` silently no-ops and every subsequent
+   * `SELECT version, …` blows up with a cryptic "Undefined column name version".
+   * Inspecting the actual columns lets us tell "ours" from "someone else's" and
+   * surface an actionable error instead.
+   */
+  async inspectTrackingTable(
+    client: cassandra.Client,
+    keyspace: string
+  ): Promise<TrackingTableStatus> {
+    const result = await client.execute(
+      "SELECT column_name FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ?",
+      [keyspace, TRACKING_TABLE],
+      { prepare: true }
+    );
+    if (result.rows.length === 0) return "absent";
+    const columns = new Set(result.rows.map((row) => String(row["column_name"])));
+    const compatible = REQUIRED_TRACKING_COLUMNS.every((column) => columns.has(column));
+    return compatible ? "compatible" : "incompatible";
+  }
+
+  /** Throws a guided error when a foreign `schema_migrations` table is in the way. */
+  async assertTrackingTableUsable(client: cassandra.Client, keyspace: string): Promise<void> {
+    const status = await this.inspectTrackingTable(client, keyspace);
+    if (status === "incompatible") {
+      throw new Error(
+        `A "${TRACKING_TABLE}" table already exists in keyspace "${keyspace}", but it was ` +
+          `created by another migration tool — it is missing columns Mordor needs ` +
+          `(${REQUIRED_TRACKING_COLUMNS.join(", ")}). Drop or rename that table, or point ` +
+          `this connection at a keyspace that doesn't already use "${TRACKING_TABLE}", then reload.`
+      );
+    }
+  }
+
   async ensureTrackingTable(client: cassandra.Client, keyspace: string): Promise<void> {
+    await this.assertTrackingTableUsable(client, keyspace);
     await client.execute(
       `CREATE TABLE IF NOT EXISTS ${quoteIdent(keyspace)}.${TRACKING_TABLE} (
         version text PRIMARY KEY,

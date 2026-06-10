@@ -27,11 +27,14 @@ const VIRTUALIZE_AFTER = 100;
 export function DataTableBody({
   table,
   columnCount,
-  highlightRowIds
+  highlightRowIds,
+  onRowOpen
 }: {
   table: Table<Row>;
   columnCount: number;
   highlightRowIds?: ReadonlySet<string>;
+  /** Called with the row's index in the current row model when it is clicked. */
+  onRowOpen?: (index: number) => void;
 }) {
   const rows = table.getRowModel().rows;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -150,21 +153,25 @@ export function DataTableBody({
                 <RenderedRow
                   key={virtualRow.key}
                   row={row}
+                  rowIndex={virtualRow.index}
                   isSelected={row.getIsSelected()}
                   isFresh={highlightRowIds?.has(row.id) ?? false}
                   offsetY={virtualRow.start}
                   tableWidth={tableWidth}
+                  {...(onRowOpen ? { onOpen: onRowOpen } : {})}
                 />
               );
             })
           ) : (
-            rows.map((row) => (
+            rows.map((row, rowIndex) => (
               <RenderedRow
                 key={row.id}
                 row={row}
+                rowIndex={rowIndex}
                 isSelected={row.getIsSelected()}
                 isFresh={highlightRowIds?.has(row.id) ?? false}
                 tableWidth={tableWidth}
+                {...(onRowOpen ? { onOpen: onRowOpen } : {})}
               />
             ))
           )}
@@ -186,16 +193,20 @@ export function DataTableBody({
 // holds for everything except genuine content changes.
 const RenderedRow = memo(function RenderedRow({
   row,
+  rowIndex,
   isSelected,
   isFresh,
   offsetY,
-  tableWidth
+  tableWidth,
+  onOpen
 }: {
   row: import("@tanstack/react-table").Row<Row>;
+  rowIndex: number;
   isSelected: boolean;
   isFresh: boolean;
   offsetY?: number;
   tableWidth: number;
+  onOpen?: (index: number) => void;
 }) {
   const style: React.CSSProperties =
     offsetY === undefined
@@ -215,6 +226,19 @@ const RenderedRow = memo(function RenderedRow({
       // CSS keyframe in styles.css — no per-row transition listener.
       data-fresh={isFresh ? "true" : undefined}
       style={style}
+      className={onOpen ? "cursor-pointer" : undefined}
+      title={onOpen ? "Click to view full row" : undefined}
+      onClick={
+        onOpen
+          ? (event) => {
+              // Don't hijack a click that the user made to select text, or one
+              // on an interactive cell control (the selection checkbox).
+              if (window.getSelection()?.toString()) return;
+              if ((event.target as HTMLElement).closest("input,button,a")) return;
+              onOpen(rowIndex);
+            }
+          : undefined
+      }
     >
       {row.getVisibleCells().map((cell) => {
         if (cell.column.id === SELECT_COLUMN_ID) {

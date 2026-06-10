@@ -307,6 +307,34 @@ export class PostgresService {
     return sql;
   }
 
+  /**
+   * Insert a single row from the schema-aware form. Only columns the user
+   * filled are included, so columns with defaults (serial PKs, `now()`,
+   * generated values) are left to the database. Values are bound as `$n`
+   * parameters and the server casts each text parameter to its target column
+   * type, so numbers/booleans/json columns work without manual quoting.
+   */
+  async insertRow(
+    table: TableIdentity,
+    values: Record<string, string>,
+  ): Promise<{ inserted: number }> {
+    const existing = this.requireConnection(table.profileId);
+    const schema = await this.fetchTableSchema(table);
+    const known = new Set(schema.columns.map((column) => column.name));
+    const columns = Object.keys(values).filter(
+      (column) => known.has(column) && (values[column] ?? "") !== "",
+    );
+    if (columns.length === 0) {
+      throw new Error("No column values provided to insert.");
+    }
+    const colList = columns.map((column) => quoteIdent(column)).join(", ");
+    const placeholders = columns.map((_, index) => `$${index + 1}`).join(", ");
+    const params = columns.map((column) => values[column] ?? null);
+    const sql = `INSERT INTO ${quoteQualified(table.keyspace, table.table)} (${colList}) VALUES (${placeholders})`;
+    await existing.client.query(sql, params);
+    return { inserted: 1 };
+  }
+
   async runSelectQuery(profileId: string, sql: string): Promise<QueryResultPayload> {
     const existing = this.requireConnection(profileId);
     // We don't impose a LIMIT here because pg respects the user's query as-is

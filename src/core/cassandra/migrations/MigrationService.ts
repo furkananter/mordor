@@ -20,7 +20,14 @@ export class MigrationService {
 
   async list(profileId: string, keyspace: string, folder: string): Promise<MigrationListPayload> {
     const client = this.cassandra.getClient(profileId);
-    const trackingTableReady = await this.tracker.hasTrackingTable(client, keyspace);
+    // Distinguish "no tracking table yet" (fine — everything is pending) from
+    // "a foreign schema_migrations table is squatting the name" (surface a
+    // guided error rather than letting the SELECT fail with a cryptic message).
+    const trackingStatus = await this.tracker.inspectTrackingTable(client, keyspace);
+    if (trackingStatus === "incompatible") {
+      await this.tracker.assertTrackingTableUsable(client, keyspace);
+    }
+    const trackingTableReady = trackingStatus === "compatible";
     const appliedByVersion = trackingTableReady ? await this.tracker.fetchApplied(client, keyspace) : new Map();
     const history = trackingTableReady ? await this.tracker.fetchHistory(client, keyspace) : [];
 

@@ -200,7 +200,14 @@ export class CassandraService {
     const existing = this.requireConnection(table.profileId);
     const query = buildTablePreviewQuery(table.keyspace, table.table);
     const options: cassandra.QueryOptions = {
-      prepare: true,
+      // Deliberately NOT prepared. A prepared `SELECT *` freezes its result
+      // metadata (the column list) at prepare time and caches it for the life
+      // of the connection. After an ALTER TABLE … ADD, the cached statement
+      // keeps returning the old columns until the connection is rebuilt — which
+      // is exactly the "I updated the table but only restarting the app shows
+      // it" bug. The query carries no bind parameters, so preparing buys us
+      // nothing here; running it unprepared re-resolves the columns every time.
+      prepare: false,
       fetchSize: previewLimit,
     };
     // Forward the previous page's continuation token when paging through a
@@ -376,6 +383,46 @@ export class CassandraService {
       await existing.client.batch(queries.slice(i, i + BATCH_CHUNK), { prepare: true, logged: true });
     }
     return { deleted: rows.length };
+  }
+
+  /**
+   * Insert a single row built from a schema-aware form in the renderer. Only
+   * the columns the user actually filled in are written — everything else is
+   * left unset (Cassandra treats an absent column as null), so defaults and
+   * TTLs behave as expected. Every value is bound as a prepared parameter and
+   * coerced to its CQL type, so quotes/UUIDs/numbers don't have to be escaped
+   * by hand.
+   */
+  async insertRow(
+    table: TableIdentity,
+    values: Record<string, string>,
+  ): Promise<{ inserted: number }> {
+    const existing = this.requireConnection(table.profileId);
+    const schema = await this.fetchTableSchema(table);
+    const typeByColumn = new Map(schema.columns.map((column) => [column.name, column.type]));
+    // Keep only real columns the user gave a value for. Empty inputs are
+    // dropped rather than written as null so the row stays minimal.
+    const columns = Object.keys(values).filter(
+      (column) => typeByColumn.has(column) && (values[column] ?? "") !== "",
+    );
+    const keyColumns = [...schema.partitionKeys, ...schema.clusteringKeys];
+    const missingKeys = keyColumns.filter((column) => (values[column] ?? "") === "");
+    if (missingKeys.length > 0) {
+      throw new Error(
+        `Cannot insert into ${table.keyspace}.${table.table}: primary key column(s) required — ${missingKeys.join(", ")}.`,
+      );
+    }
+    if (columns.length === 0) {
+      throw new Error("No column values provided to insert.");
+    }
+    const params = columns.map((column) =>
+      coerceForCassandra(values[column] ?? "", typeByColumn.get(column) ?? "text"),
+    );
+    const colList = columns.map((column) => quoteIdentifier(column)).join(", ");
+    const placeholders = columns.map(() => "?").join(", ");
+    const cql = `INSERT INTO ${quoteIdentifier(table.keyspace)}.${quoteIdentifier(table.table)} (${colList}) VALUES (${placeholders})`;
+    await existing.client.execute(cql, params, { prepare: true });
+    return { inserted: 1 };
   }
 
   async runSelectQuery(
