@@ -345,14 +345,30 @@ export class CassandraService {
     return result;
   }
 
+  /**
+   * Shared setup for write paths (delete/insert): grab the live connection,
+   * read the table schema once, and pre-compute the column→type map and the
+   * ordered primary-key column list. Keeps deleteRows and insertRow from
+   * re-deriving (and drifting on) the same scaffolding.
+   */
+  private async resolveWriteContext(table: TableIdentity): Promise<{
+    existing: ActiveConnection;
+    typeByColumn: Map<string, string>;
+    keyColumns: string[];
+  }> {
+    const existing = this.requireConnection(table.profileId);
+    const schema = await this.fetchTableSchema(table);
+    const typeByColumn = new Map(schema.columns.map((column) => [column.name, column.type]));
+    const keyColumns = [...schema.partitionKeys, ...schema.clusteringKeys];
+    return { existing, typeByColumn, keyColumns };
+  }
+
   async deleteRows(
     table: TableIdentity,
     rows: Array<Record<string, string>>,
   ): Promise<{ deleted: number }> {
     if (rows.length === 0) return { deleted: 0 };
-    const existing = this.requireConnection(table.profileId);
-    const schema = await this.fetchTableSchema(table);
-    const keyColumns = [...schema.partitionKeys, ...schema.clusteringKeys];
+    const { existing, typeByColumn, keyColumns } = await this.resolveWriteContext(table);
     if (keyColumns.length === 0) {
       throw new Error(
         `Cannot delete rows from ${table.keyspace}.${table.table}: no primary key columns found.`,
@@ -368,9 +384,8 @@ export class CassandraService {
           .join(", ")}).`,
       );
     }
-    const typeByColumn = new Map(schema.columns.map((column) => [column.name, column.type]));
-    const whereClause = keyColumns.map((column) => `"${column}" = ?`).join(" AND ");
-    const cql = `DELETE FROM "${table.keyspace}"."${table.table}" WHERE ${whereClause}`;
+    const whereClause = keyColumns.map((column) => `${quoteIdentifier(column)} = ?`).join(" AND ");
+    const cql = `DELETE FROM ${quoteIdentifier(table.keyspace)}.${quoteIdentifier(table.table)} WHERE ${whereClause}`;
     const queries = rows.map((row) => ({
       query: cql,
       params: keyColumns.map((column) => coerceForCassandra(row[column] ?? "", typeByColumn.get(column) ?? "text")),
@@ -397,16 +412,16 @@ export class CassandraService {
     table: TableIdentity,
     values: Record<string, string>,
   ): Promise<{ inserted: number }> {
-    const existing = this.requireConnection(table.profileId);
-    const schema = await this.fetchTableSchema(table);
-    const typeByColumn = new Map(schema.columns.map((column) => [column.name, column.type]));
+    const { existing, typeByColumn, keyColumns } = await this.resolveWriteContext(table);
     // Keep only real columns the user gave a value for. Empty inputs are
     // dropped rather than written as null so the row stays minimal.
     const columns = Object.keys(values).filter(
-      (column) => typeByColumn.has(column) && (values[column] ?? "") !== "",
+      (column) => typeByColumn.has(column) && (values[column] ?? "").trim() !== "",
     );
-    const keyColumns = [...schema.partitionKeys, ...schema.clusteringKeys];
-    const missingKeys = keyColumns.filter((column) => (values[column] ?? "") === "");
+    // Trim matches the renderer's own required-field check so a whitespace-only
+    // key is rejected here with a clear message instead of failing deep in the
+    // driver's type coercion.
+    const missingKeys = keyColumns.filter((column) => (values[column] ?? "").trim() === "");
     if (missingKeys.length > 0) {
       throw new Error(
         `Cannot insert into ${table.keyspace}.${table.table}: primary key column(s) required — ${missingKeys.join(", ")}.`,
@@ -542,6 +557,25 @@ export class CassandraService {
 function coerceForCassandra(raw: string, cqlType: string): unknown {
   const type = cqlType.toLowerCase().trim();
   if (raw === "") return null;
+  // Collections, tuples, and UDTs are entered as JSON in the insert form
+  // (e.g. ["a","b"] for list<text>, {"k":"v"} for map<text,text>). The driver
+  // encodes a JS array/object straight into the collection; without this the
+  // raw string would reach the prepared encoder and throw a type error.
+  if (
+    type.startsWith("list<") ||
+    type.startsWith("set<") ||
+    type.startsWith("map<") ||
+    type.startsWith("tuple<") ||
+    type.startsWith("frozen<")
+  ) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      throw new Error(
+        `Invalid ${cqlType} value — enter JSON (e.g. ["a","b"] or {"k":"v"}): ${raw}`,
+      );
+    }
+  }
   if (
     type === "int" ||
     type === "smallint" ||

@@ -46,6 +46,10 @@ export function DataPanel({
   // rows that were *updated* in place (same id, changed signature). Resets on
   // table change / live toggle off.
   const baselineRef = useRef<Map<string, string> | undefined>(undefined);
+  // The column list the baseline signatures were built from. When it changes
+  // (e.g. an ALTER TABLE … ADD between ticks) every signature would differ and
+  // the whole table would flash — so we rebaseline silently instead.
+  const baselineColumnsRef = useRef<string>("");
   const freshRowsRef = useRef<Map<string, number>>(new Map());
   const [freshIds, setFreshIds] = useState<ReadonlySet<string>>(new Set());
 
@@ -55,6 +59,7 @@ export function DataPanel({
     freshRowsRef.current = new Map();
     setFreshIds(new Set());
     baselineRef.current = undefined;
+    baselineColumnsRef.current = "";
   }, [tableKey]);
 
   const { lastTickAt, pending } = useLivePolling({
@@ -75,6 +80,7 @@ export function DataPanel({
   useEffect(() => {
     if (!liveEnabled || !preview || pkColumnsForDiff.length === 0) {
       baselineRef.current = undefined;
+      baselineColumnsRef.current = "";
       if (freshRowsRef.current.size > 0) {
         freshRowsRef.current = new Map();
         setFreshIds(new Set());
@@ -82,14 +88,18 @@ export function DataPanel({
       return;
     }
     const columns = preview.columns;
+    const columnsKey = columns.join("");
     const current = new Map<string, string>();
     for (let index = 0; index < preview.rows.length; index += 1) {
       const row = preview.rows[index]!;
       const id = computeRowId(row, pkColumnsForDiff, index);
       current.set(id, rowSignature(row, columns));
     }
-    if (baselineRef.current === undefined) {
+    // First tick, or the column set changed (signatures aren't comparable
+    // across different column lists) — establish a fresh baseline, no flash.
+    if (baselineRef.current === undefined || baselineColumnsRef.current !== columnsKey) {
       baselineRef.current = current;
+      baselineColumnsRef.current = columnsKey;
       return;
     }
     const previousSnapshot = baselineRef.current;

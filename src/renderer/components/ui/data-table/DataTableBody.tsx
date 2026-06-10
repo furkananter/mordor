@@ -33,8 +33,8 @@ export function DataTableBody({
   table: Table<Row>;
   columnCount: number;
   highlightRowIds?: ReadonlySet<string>;
-  /** Called with the row's index in the current row model when it is clicked. */
-  onRowOpen?: (index: number) => void;
+  /** Called with the row's stable id when it is clicked, to open its detail. */
+  onRowOpen?: (id: string) => void;
 }) {
   const rows = table.getRowModel().rows;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -153,7 +153,6 @@ export function DataTableBody({
                 <RenderedRow
                   key={virtualRow.key}
                   row={row}
-                  rowIndex={virtualRow.index}
                   isSelected={row.getIsSelected()}
                   isFresh={highlightRowIds?.has(row.id) ?? false}
                   offsetY={virtualRow.start}
@@ -163,11 +162,10 @@ export function DataTableBody({
               );
             })
           ) : (
-            rows.map((row, rowIndex) => (
+            rows.map((row) => (
               <RenderedRow
                 key={row.id}
                 row={row}
-                rowIndex={rowIndex}
                 isSelected={row.getIsSelected()}
                 isFresh={highlightRowIds?.has(row.id) ?? false}
                 tableWidth={tableWidth}
@@ -193,7 +191,6 @@ export function DataTableBody({
 // holds for everything except genuine content changes.
 const RenderedRow = memo(function RenderedRow({
   row,
-  rowIndex,
   isSelected,
   isFresh,
   offsetY,
@@ -201,12 +198,11 @@ const RenderedRow = memo(function RenderedRow({
   onOpen
 }: {
   row: import("@tanstack/react-table").Row<Row>;
-  rowIndex: number;
   isSelected: boolean;
   isFresh: boolean;
   offsetY?: number;
   tableWidth: number;
-  onOpen?: (index: number) => void;
+  onOpen?: (id: string) => void;
 }) {
   const style: React.CSSProperties =
     offsetY === undefined
@@ -235,7 +231,7 @@ const RenderedRow = memo(function RenderedRow({
               // on an interactive cell control (the selection checkbox).
               if (window.getSelection()?.toString()) return;
               if ((event.target as HTMLElement).closest("input,button,a")) return;
-              onOpen(rowIndex);
+              onOpen(row.id);
             }
           : undefined
       }

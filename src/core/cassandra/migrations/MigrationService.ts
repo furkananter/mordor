@@ -25,7 +25,8 @@ export class MigrationService {
     // guided error rather than letting the SELECT fail with a cryptic message).
     const trackingStatus = await this.tracker.inspectTrackingTable(client, keyspace);
     if (trackingStatus === "incompatible") {
-      await this.tracker.assertTrackingTableUsable(client, keyspace);
+      // Reuse the inspection we just ran — assert only throws here.
+      await this.tracker.assertTrackingTableUsable(client, keyspace, trackingStatus);
     }
     const trackingTableReady = trackingStatus === "compatible";
     const appliedByVersion = trackingTableReady ? await this.tracker.fetchApplied(client, keyspace) : new Map();

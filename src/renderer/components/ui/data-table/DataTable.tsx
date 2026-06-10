@@ -76,7 +76,10 @@ function DataTableImpl({
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [detailIndex, setDetailIndex] = useState<number | null>(null);
+  // The open detail row is tracked by its stable row id, not its position —
+  // sorting, filtering, and live-poll all reorder/replace the row model, and a
+  // positional index would silently start pointing at a different record.
+  const [detailRowId, setDetailRowId] = useState<string | null>(null);
   const preferredPageSize = usePreferencesStore((state) => state.pageSize);
   const effectivePageSize = pageSize ?? preferredPageSize;
 
@@ -155,7 +158,7 @@ function DataTableImpl({
         table={table}
         columnCount={columns.length}
         {...(highlightRowIds ? { highlightRowIds } : {})}
-        {...(enableRowDetail ? { onRowOpen: setDetailIndex } : {})}
+        {...(enableRowDetail ? { onRowOpen: setDetailRowId } : {})}
       />
 
       <DataTablePagination table={table} />
@@ -170,17 +173,25 @@ function DataTableImpl({
         onClearAll={() => setColumnFilters([])}
       />
 
-      {enableRowDetail && detailIndex !== null && displayedRows[detailIndex] ? (
-        <RowDetailDrawer
-          rows={displayedRows.map((row) => row.original)}
-          index={detailIndex}
-          columns={result.columns}
-          {...(columnTypes ? { columnTypes } : {})}
-          {...(detailTitle ? { title: detailTitle } : {})}
-          onNavigate={setDetailIndex}
-          onClose={() => setDetailIndex(null)}
-        />
-      ) : null}
+      {enableRowDetail && detailRowId !== null
+        ? (() => {
+            const detailIndex = displayedRows.findIndex((row) => row.id === detailRowId);
+            // The row left the current view (filtered out, or removed by a live
+            // poll). Nothing to show — the drawer simply closes.
+            if (detailIndex < 0) return null;
+            return (
+              <RowDetailDrawer
+                rows={displayedRows.map((row) => row.original)}
+                index={detailIndex}
+                columns={result.columns}
+                {...(columnTypes ? { columnTypes } : {})}
+                {...(detailTitle ? { title: detailTitle } : {})}
+                onNavigate={(next) => setDetailRowId(displayedRows[next]?.id ?? null)}
+                onClose={() => setDetailRowId(null)}
+              />
+            );
+          })()
+        : null}
     </div>
   );
 }

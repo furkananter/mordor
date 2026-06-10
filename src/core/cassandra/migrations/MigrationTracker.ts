@@ -62,9 +62,17 @@ export class MigrationTracker {
     return compatible ? "compatible" : "incompatible";
   }
 
-  /** Throws a guided error when a foreign `schema_migrations` table is in the way. */
-  async assertTrackingTableUsable(client: cassandra.Client, keyspace: string): Promise<void> {
-    const status = await this.inspectTrackingTable(client, keyspace);
+  /**
+   * Throws a guided error when a foreign `schema_migrations` table is in the
+   * way. Pass `knownStatus` to reuse an inspection the caller already ran and
+   * skip a second system_schema round-trip.
+   */
+  async assertTrackingTableUsable(
+    client: cassandra.Client,
+    keyspace: string,
+    knownStatus?: TrackingTableStatus
+  ): Promise<void> {
+    const status = knownStatus ?? (await this.inspectTrackingTable(client, keyspace));
     if (status === "incompatible") {
       throw new Error(
         `A "${TRACKING_TABLE}" table already exists in keyspace "${keyspace}", but it was ` +

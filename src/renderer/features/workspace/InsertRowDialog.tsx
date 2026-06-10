@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Dialog } from "../../components/ui/Dialog";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
@@ -29,11 +29,17 @@ export function InsertRowDialog({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
 
-  const reset = () => {
-    setValues({});
-    setError(undefined);
-    setSubmitting(false);
-  };
+  // Clear the form whenever the dialog is closed, regardless of how (Cancel,
+  // Esc, backdrop, the header X, or a successful insert). The component stays
+  // mounted while a table is selected, so without this the next open would
+  // show the previously abandoned values.
+  useEffect(() => {
+    if (!open) {
+      setValues({});
+      setError(undefined);
+      setSubmitting(false);
+    }
+  }, [open]);
 
   const handleSubmit = async () => {
     const missing = [...keyColumns].filter((column) => !(values[column] ?? "").trim());
@@ -45,7 +51,6 @@ export function InsertRowDialog({
     setError(undefined);
     try {
       await window.cassandraDesk.insertTableRow(schema.table, values);
-      reset();
       onOpenChange(false);
       onInserted();
     } catch (caught) {
@@ -67,8 +72,8 @@ export function InsertRowDialog({
         </>
       }
       onOpenChange={(next) => {
+        // Don't let a stray Esc/backdrop click abort an in-flight insert.
         if (submitting) return;
-        if (!next) reset();
         onOpenChange(next);
       }}
     >
