@@ -9,7 +9,16 @@ import { CassandraService } from "../CassandraService";
 import { MigrationExecutor } from "./MigrationExecutor";
 import { MigrationFileStore } from "./MigrationFileStore";
 import { MigrationTracker } from "./MigrationTracker";
-import { formatApplied } from "./types";
+import { unusableTrackingError } from "./TrackingSchema";
+import { AppliedRow, formatApplied, versionKeyVariants } from "./types";
+
+function lookupApplied(applied: Map<string, AppliedRow>, version: string): AppliedRow | undefined {
+  for (const key of versionKeyVariants(version)) {
+    const row = applied.get(key);
+    if (row) return row;
+  }
+  return undefined;
+}
 
 export class MigrationService {
   private readonly files = new MigrationFileStore();
@@ -20,22 +29,29 @@ export class MigrationService {
 
   async list(profileId: string, keyspace: string, folder: string): Promise<MigrationListPayload> {
     const client = this.cassandra.getClient(profileId);
-    // Distinguish "no tracking table yet" (fine — everything is pending) from
-    // "a foreign schema_migrations table is squatting the name" (surface a
-    // guided error rather than letting the SELECT fail with a cryptic message).
-    const trackingStatus = await this.tracker.inspectTrackingTable(client, keyspace);
-    if (trackingStatus === "incompatible") {
-      // Reuse the inspection we just ran — assert only throws here.
-      await this.tracker.assertTrackingTableUsable(client, keyspace, trackingStatus);
+    // A `schema_migrations` table is a very common name. Rather than failing on
+    // a foreign one, resolve an adapter: absent (everything pending), native
+    // (ours), adopted/adopted-readonly (someone else's, mapped by column), or
+    // unusable (no version column → guided error).
+    const adapter = await this.tracker.resolveTracking(client, keyspace);
+    if (adapter.kind === "unusable") {
+      throw unusableTrackingError(keyspace, adapter.columns);
     }
-    const trackingTableReady = trackingStatus === "compatible";
-    const appliedByVersion = trackingTableReady ? await this.tracker.fetchApplied(client, keyspace) : new Map();
+    const trackingTableReady = adapter.kind === "ready";
+    const appliedByVersion = trackingTableReady
+      ? await this.tracker.fetchApplied(client, keyspace, adapter)
+      : new Map<string, AppliedRow>();
     const history = trackingTableReady ? await this.tracker.fetchHistory(client, keyspace) : [];
 
     const fileEntries = await this.files.list(folder);
 
+    // Drift detection only makes sense against checksums Mordor itself wrote —
+    // other tools (Flyway's CRC32, etc.) use incompatible checksum schemes, so
+    // comparing would always report a spurious "modified".
+    const driftAware = adapter.kind === "ready" && adapter.mode === "native";
+
     const files: MigrationFile[] = fileEntries.map((entry) => {
-      const applied = appliedByVersion.get(entry.version);
+      const applied = lookupApplied(appliedByVersion, entry.version);
       if (!applied) {
         return {
           version: entry.version,
@@ -45,6 +61,7 @@ export class MigrationService {
           checksum: entry.checksum
         };
       }
+      const drifted = driftAware && applied.checksum != null && applied.checksum !== entry.checksum;
       if (!applied.success) {
         const failed: MigrationFile = {
           version: entry.version,
@@ -52,24 +69,30 @@ export class MigrationService {
           filename: entry.filename,
           status: "failed",
           checksum: entry.checksum,
-          appliedChecksum: applied.checksum,
           appliedAt: formatApplied(applied.applied_at)
         };
+        if (driftAware && applied.checksum != null) failed.appliedChecksum = applied.checksum;
         if (applied.error_message) failed.failedReason = applied.error_message;
         return failed;
       }
-      return {
+      const file: MigrationFile = {
         version: entry.version,
         name: entry.name,
         filename: entry.filename,
-        status: applied.checksum === entry.checksum ? "applied" : "applied-modified",
+        status: drifted ? "applied-modified" : "applied",
         checksum: entry.checksum,
-        appliedChecksum: applied.checksum,
         appliedAt: formatApplied(applied.applied_at)
       };
+      if (driftAware && applied.checksum != null) file.appliedChecksum = applied.checksum;
+      return file;
     });
 
-    return { keyspace, folder, files, trackingTableReady, history };
+    const payload: MigrationListPayload = { keyspace, folder, files, trackingTableReady, history };
+    if (adapter.kind === "ready" && adapter.mode !== "native") {
+      payload.tracking = { mode: adapter.mode, versionColumn: adapter.map.version };
+      if (adapter.tool) payload.tracking.tool = adapter.tool;
+    }
+    return payload;
   }
 
   async ensureTrackingTable(profileId: string, keyspace: string): Promise<void> {
@@ -112,8 +135,8 @@ export class MigrationService {
     // Run the migration through a dedicated client pinned to the migrations
     // keyspace, so unqualified table references inside the file resolve.
     return this.cassandra.runWithKeyspace(profileId, keyspace, async (client) => {
-      await this.tracker.ensureTrackingTable(client, keyspace);
-      return this.executor.apply(client, keyspace, entry);
+      const adapter = await this.tracker.ensureTrackingTable(client, keyspace);
+      return this.executor.apply(client, keyspace, entry, adapter);
     });
   }
 }

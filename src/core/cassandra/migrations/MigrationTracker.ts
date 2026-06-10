@@ -2,99 +2,78 @@ import type * as cassandra from "cassandra-driver";
 import { MigrationHistoryEntry } from "../../shared/messages";
 import {
   AppliedRow,
+  ApplyOutcome,
   HISTORY_LIMIT,
   HISTORY_TABLE,
   MigrationEntry,
+  REQUIRED_TRACKING_COLUMNS,
   TRACKING_TABLE,
-  quoteIdent
+  quoteIdent,
+  versionKeyVariants,
+  versionToString
 } from "./types";
-
-interface ApplyOutcome {
-  success: boolean;
-  error?: string;
-  executed?: number;
-  total?: number;
-}
-
-/** Columns Mordor reads from / writes to the tracking table. */
-const REQUIRED_TRACKING_COLUMNS = [
-  "version",
-  "filename",
-  "checksum",
-  "applied_at",
-  "success",
-  "error_message"
-] as const;
-
-export type TrackingTableStatus = "absent" | "compatible" | "incompatible";
+import {
+  TrackingAdapter,
+  buildTrackingInsert,
+  classifyColumns,
+  isWritable,
+  nativeMap,
+  rowToApplied,
+  uniqueColumns,
+  unusableTrackingError
+} from "./TrackingSchema";
 
 export class MigrationTracker {
-  async hasTrackingTable(client: cassandra.Client, keyspace: string): Promise<boolean> {
+  /**
+   * Inspect the keyspace's `schema_migrations` table and decide how Mordor can
+   * work with it. A `schema_migrations` table is an extremely common name —
+   * golang-migrate, Flyway, Liquibase, Rails and others all reach for it, each
+   * with their own column layout. Rather than failing on a foreign one, we map
+   * its columns and adapt (read-only for golang-migrate's single-row design).
+   */
+  async resolveTracking(client: cassandra.Client, keyspace: string): Promise<TrackingAdapter> {
     const result = await client.execute(
-      "SELECT table_name FROM system_schema.tables WHERE keyspace_name = ? AND table_name = ?",
+      "SELECT column_name, type, kind FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ?",
       [keyspace, TRACKING_TABLE],
       { prepare: true }
     );
-    return result.rows.length > 0;
-  }
-
-  /**
-   * A `schema_migrations` table is an extremely common name — golang-migrate,
-   * Flyway, Liquibase, Rails, and others all reach for it, each with their own
-   * column layout. If one of those already lives in the target keyspace, our
-   * `CREATE TABLE IF NOT EXISTS` silently no-ops and every subsequent
-   * `SELECT version, …` blows up with a cryptic "Undefined column name version".
-   * Inspecting the actual columns lets us tell "ours" from "someone else's" and
-   * surface an actionable error instead.
-   */
-  async inspectTrackingTable(
-    client: cassandra.Client,
-    keyspace: string
-  ): Promise<TrackingTableStatus> {
-    const result = await client.execute(
-      "SELECT column_name FROM system_schema.columns WHERE keyspace_name = ? AND table_name = ?",
-      [keyspace, TRACKING_TABLE],
-      { prepare: true }
+    return classifyColumns(
+      result.rows.map((row) => ({
+        name: String(row["column_name"]),
+        type: String(row["type"] ?? ""),
+        kind: String(row["kind"] ?? "")
+      }))
     );
-    if (result.rows.length === 0) return "absent";
-    const columns = new Set(result.rows.map((row) => String(row["column_name"])));
-    const compatible = REQUIRED_TRACKING_COLUMNS.every((column) => columns.has(column));
-    return compatible ? "compatible" : "incompatible";
   }
 
   /**
-   * Throws a guided error when a foreign `schema_migrations` table is in the
-   * way. Pass `knownStatus` to reuse an inspection the caller already ran and
-   * skip a second system_schema round-trip.
+   * Ensure there is a usable tracking table and return the adapter for it.
+   * Creates Mordor's own table only when none exists; an adopted foreign table
+   * is left exactly as-is. The Mordor-owned history table is always ensured.
    */
-  async assertTrackingTableUsable(
-    client: cassandra.Client,
-    keyspace: string,
-    knownStatus?: TrackingTableStatus
-  ): Promise<void> {
-    const status = knownStatus ?? (await this.inspectTrackingTable(client, keyspace));
-    if (status === "incompatible") {
-      throw new Error(
-        `A "${TRACKING_TABLE}" table already exists in keyspace "${keyspace}", but it was ` +
-          `created by another migration tool — it is missing columns Mordor needs ` +
-          `(${REQUIRED_TRACKING_COLUMNS.join(", ")}). Drop or rename that table, or point ` +
-          `this connection at a keyspace that doesn't already use "${TRACKING_TABLE}", then reload.`
-      );
+  async ensureTrackingTable(client: cassandra.Client, keyspace: string): Promise<TrackingAdapter> {
+    let adapter = await this.resolveTracking(client, keyspace);
+    if (adapter.kind === "unusable") {
+      throw unusableTrackingError(keyspace, adapter.columns);
     }
+    if (adapter.kind === "absent") {
+      await client.execute(
+        `CREATE TABLE IF NOT EXISTS ${quoteIdent(keyspace)}.${TRACKING_TABLE} (
+          version text PRIMARY KEY,
+          filename text,
+          checksum text,
+          applied_at timestamp,
+          success boolean,
+          error_message text
+        )`
+      );
+      adapter = { kind: "ready", mode: "native", map: nativeMap(), columns: [...REQUIRED_TRACKING_COLUMNS] };
+    }
+    await this.ensureHistoryTable(client, keyspace);
+    return adapter;
   }
 
-  async ensureTrackingTable(client: cassandra.Client, keyspace: string): Promise<void> {
-    await this.assertTrackingTableUsable(client, keyspace);
-    await client.execute(
-      `CREATE TABLE IF NOT EXISTS ${quoteIdent(keyspace)}.${TRACKING_TABLE} (
-        version text PRIMARY KEY,
-        filename text,
-        checksum text,
-        applied_at timestamp,
-        success boolean,
-        error_message text
-      )`
-    );
+  private async ensureHistoryTable(client: cassandra.Client, keyspace: string): Promise<void> {
     await client.execute(
       `CREATE TABLE IF NOT EXISTS ${quoteIdent(keyspace)}.${HISTORY_TABLE} (
         bucket text,
@@ -110,15 +89,67 @@ export class MigrationTracker {
     );
   }
 
-  async fetchApplied(client: cassandra.Client, keyspace: string): Promise<Map<string, AppliedRow>> {
-    const result = await client.execute(
-      `SELECT version, filename, checksum, applied_at, success, error_message FROM ${quoteIdent(keyspace)}.${TRACKING_TABLE}`
-    );
+  /**
+   * Which migration versions are already applied. Reads the tracking table
+   * through the adapter's column map, then — for adopted tables — folds in
+   * Mordor's own history so applies it made are remembered even when the table
+   * is read-only (golang-migrate) or a foreign write was skipped.
+   */
+  async fetchApplied(
+    client: cassandra.Client,
+    keyspace: string,
+    adapter: TrackingAdapter
+  ): Promise<Map<string, AppliedRow>> {
     const map = new Map<string, AppliedRow>();
-    for (const row of result.rows as unknown as AppliedRow[]) {
-      map.set(row.version, row);
+    if (adapter.kind !== "ready") return map;
+    const columnMap = adapter.map;
+
+    try {
+      const columns = uniqueColumns(columnMap).map(quoteIdent).join(", ");
+      const result = await client.execute(
+        `SELECT ${columns} FROM ${quoteIdent(keyspace)}.${TRACKING_TABLE}`
+      );
+      for (const row of result.rows as unknown as Record<string, unknown>[]) {
+        const version = versionToString(row[columnMap.version]);
+        if (!version) continue;
+        const applied = rowToApplied(version, row, columnMap);
+        for (const key of versionKeyVariants(version)) {
+          if (!map.has(key)) map.set(key, applied);
+        }
+      }
+    } catch {
+      // A foreign table can have a shape our SELECT trips over; fall back to the
+      // history sidecar below rather than failing the whole listing.
+    }
+
+    if (adapter.mode !== "native") {
+      await this.mergeHistoryApplied(client, keyspace, map);
     }
     return map;
+  }
+
+  private async mergeHistoryApplied(
+    client: cassandra.Client,
+    keyspace: string,
+    map: Map<string, AppliedRow>
+  ): Promise<void> {
+    const history = await this.fetchHistory(client, keyspace);
+    for (const entry of history) {
+      if (!entry.success) continue;
+      const variants = versionKeyVariants(entry.version);
+      if (variants.some((key) => map.has(key))) continue;
+      const applied: AppliedRow = {
+        version: entry.version,
+        filename: entry.filename,
+        checksum: null,
+        applied_at: entry.appliedAt || null,
+        success: true,
+        error_message: null
+      };
+      for (const key of variants) {
+        if (!map.has(key)) map.set(key, applied);
+      }
+    }
   }
 
   async fetchHistory(client: cassandra.Client, keyspace: string): Promise<MigrationHistoryEntry[]> {
@@ -146,31 +177,67 @@ export class MigrationTracker {
     }
   }
 
+  /**
+   * Record the result of an apply. Native tables are written directly; adopted
+   * tables get a best-effort upsert that never blocks the apply (the schema
+   * change already ran, and the history sidecar is the safety net); read-only
+   * tables are left untouched. History is always recorded, non-fatally.
+   */
   async recordResult(
     client: cassandra.Client,
     keyspace: string,
     entry: MigrationEntry,
-    outcome: ApplyOutcome
+    outcome: ApplyOutcome,
+    adapter: TrackingAdapter
   ): Promise<void> {
     const now = new Date();
-    await client.execute(
-      `INSERT INTO ${quoteIdent(keyspace)}.${TRACKING_TABLE} (version, filename, checksum, applied_at, success, error_message) VALUES (?, ?, ?, ?, ?, ?)`,
-      [entry.version, entry.filename, entry.checksum, now, outcome.success, outcome.error ?? null],
-      { prepare: true }
-    );
-    await client.execute(
-      `INSERT INTO ${quoteIdent(keyspace)}.${HISTORY_TABLE} (bucket, applied_at, version, filename, success, statements_executed, total_statements, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        "log",
-        now,
-        entry.version,
-        entry.filename,
-        outcome.success,
-        outcome.executed ?? null,
-        outcome.total ?? null,
-        outcome.error ?? null
-      ],
-      { prepare: true }
-    );
+    if (adapter.kind === "ready" && isWritable(adapter.mode)) {
+      if (adapter.mode === "native") {
+        const insert = buildTrackingInsert(keyspace, adapter.map, entry, outcome, now);
+        await client.execute(insert.cql, insert.params, { prepare: true });
+      } else if (outcome.success || adapter.map.success) {
+        // Adopt-write only when we can represent the result faithfully. A failed
+        // apply must not be written to a table with no success/failure column,
+        // since a bare version row would read back as "applied" — leave it
+        // pending (retryable) and let history record the failure instead.
+        // Best-effort otherwise: a foreign table's quirks (odd column names,
+        // type mismatches) must never fail the apply — the schema change already
+        // ran and the history sidecar below is the safety net.
+        try {
+          const insert = buildTrackingInsert(keyspace, adapter.map, entry, outcome, now);
+          await client.execute(insert.cql, insert.params, { prepare: true });
+        } catch (caught) {
+          console.warn(`Mordor could not update the adopted ${TRACKING_TABLE} table:`, caught);
+        }
+      }
+    }
+    await this.recordHistory(client, keyspace, entry, outcome, now);
+  }
+
+  private async recordHistory(
+    client: cassandra.Client,
+    keyspace: string,
+    entry: MigrationEntry,
+    outcome: ApplyOutcome,
+    now: Date
+  ): Promise<void> {
+    try {
+      await client.execute(
+        `INSERT INTO ${quoteIdent(keyspace)}.${HISTORY_TABLE} (bucket, applied_at, version, filename, success, statements_executed, total_statements, error_message) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          "log",
+          now,
+          entry.version,
+          entry.filename,
+          outcome.success,
+          outcome.executed ?? null,
+          outcome.total ?? null,
+          outcome.error ?? null
+        ],
+        { prepare: true }
+      );
+    } catch (caught) {
+      console.warn("Mordor could not write migration history:", caught);
+    }
   }
 }

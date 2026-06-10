@@ -2,12 +2,18 @@ import type * as cassandra from "cassandra-driver";
 import { MigrationApplyResult } from "../../shared/messages";
 import { splitCqlStatements } from "../cqlSplit";
 import { MigrationTracker } from "./MigrationTracker";
+import { TrackingAdapter } from "./TrackingSchema";
 import { MigrationEntry } from "./types";
 
 export class MigrationExecutor {
   constructor(private readonly tracker: MigrationTracker) {}
 
-  async apply(client: cassandra.Client, keyspace: string, entry: MigrationEntry): Promise<MigrationApplyResult> {
+  async apply(
+    client: cassandra.Client,
+    keyspace: string,
+    entry: MigrationEntry,
+    adapter: TrackingAdapter
+  ): Promise<MigrationApplyResult> {
     const statements = splitCqlStatements(entry.contents);
     const total = statements.length;
     const started = Date.now();
@@ -25,12 +31,13 @@ export class MigrationExecutor {
       } catch (caught) {
         const message = caught instanceof Error ? caught.message : String(caught);
         const detailed = `Statement ${index + 1}/${total} failed: ${message}`;
-        await this.tracker.recordResult(client, keyspace, entry, {
-          success: false,
-          error: detailed,
-          executed,
-          total
-        });
+        await this.tracker.recordResult(
+          client,
+          keyspace,
+          entry,
+          { success: false, error: detailed, executed, total },
+          adapter
+        );
         return {
           version: entry.version,
           filename: entry.filename,
@@ -48,7 +55,7 @@ export class MigrationExecutor {
       }
     }
 
-    await this.tracker.recordResult(client, keyspace, entry, { success: true, executed, total });
+    await this.tracker.recordResult(client, keyspace, entry, { success: true, executed, total }, adapter);
     return {
       version: entry.version,
       filename: entry.filename,

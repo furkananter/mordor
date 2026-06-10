@@ -55,12 +55,23 @@ export interface MigrationHistoryEntry {
   errorMessage?: string;
 }
 
+export interface MigrationTrackingInfo {
+  /** native = Mordor's own table; adopted = a foreign table Mordor reads & writes; adopted-readonly = read only. */
+  mode: "native" | "adopted" | "adopted-readonly";
+  /** Best-effort label for the tool that created the table (e.g. "golang-migrate"). */
+  tool?: string;
+  /** The column Mordor matched as the migration version. */
+  versionColumn?: string;
+}
+
 export interface MigrationListPayload {
   keyspace: string;
   folder: string;
   files: MigrationFile[];
   trackingTableReady: boolean;
   history: MigrationHistoryEntry[];
+  /** Present when Mordor is adapting to a non-native tracking table. */
+  tracking?: MigrationTrackingInfo;
 }
 
 export interface MigrationFailedStatement {

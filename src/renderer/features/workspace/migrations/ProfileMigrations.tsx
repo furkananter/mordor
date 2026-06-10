@@ -74,6 +74,14 @@ export function ProfileMigrations({
                     <AlertTriangle size={11} /> tracking table will be created
                   </span>
                 )}
+                {migrationsList.tracking && (
+                  <span className="ml-2 inline-flex items-center gap-1 text-warning">
+                    <AlertTriangle size={11} />
+                    {migrationsList.tracking.mode === "adopted-readonly"
+                      ? `reading ${migrationsList.tracking.tool ?? "an existing"} schema_migrations (read-only)`
+                      : `adapting to ${migrationsList.tracking.tool ?? "an existing"} schema_migrations`}
+                  </span>
+                )}
               </>
             ) : null}
           </span>
