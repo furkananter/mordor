@@ -27,7 +27,7 @@ export function DataPanel({
   const setLiveIntervalMs = usePreferencesStore((state) => state.setLiveIntervalMs);
   const queryMode = usePreferencesStore((state) => state.queryMode);
   const reloadSelectedTable = useSchemaStore((state) => state.reloadSelectedTable);
-  const refreshPreviewSilent = useSchemaStore((state) => state.refreshPreviewSilent);
+  const refreshPreviewLive = useSchemaStore((state) => state.refreshPreviewLive);
   const loadMorePreview = useSchemaStore((state) => state.loadMorePreview);
   const loadAllPreview = useSchemaStore((state) => state.loadAllPreview);
   const previewLoadingMore = useSchemaStore((state) => state.previewLoadingMore);
@@ -65,7 +65,7 @@ export function DataPanel({
   const { lastTickAt, pending } = useLivePolling({
     enabled: liveEnabled && Boolean(schema),
     intervalMs: liveIntervalMs,
-    onTick: refreshPreviewSilent,
+    onTick: refreshPreviewLive,
     key: tableKey
   });
 
@@ -254,7 +254,6 @@ export function DataPanel({
         columnTypes={columnTypes}
         enableSelection={Boolean(schema)}
         rowIdColumns={pkColumns}
-        {...(schema ? { detailTitle: `${schema.table.keyspace}.${schema.table.table}` } : {})}
         {...(liveEnabled && freshIds.size > 0 ? { highlightRowIds: freshIds } : {})}
         {...(deleteConfig ? { deleteConfig } : {})}
       />

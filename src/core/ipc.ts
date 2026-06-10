@@ -15,6 +15,11 @@ import {
   TableSchemaPayload,
 } from "./shared/messages";
 import { LocalDiscoveryResult } from "./cassandra/localDiscovery";
+import { ExportRequest, ExportResult } from "./export/types";
+
+// Re-export so renderer code can import types from a single `core/ipc` module
+// without reaching into engine-internal paths.
+export type { ExportRequest, ExportResult } from "./export/types";
 
 export type CreateProfileInput = ConnectionDraft;
 
@@ -197,6 +202,28 @@ export interface CassandraDeskApi {
   redisDelete(profileId: string, db: number, key: string): Promise<void>;
   redisSetString(profileId: string, db: number, key: string, value: string, ttlSeconds?: number): Promise<void>;
   redisCommand(profileId: string, db: number, command: string): Promise<RedisCommandResult>;
+  /**
+   * Open the OS folder picker so the user can pick where the export goes.
+   * Returns the absolute path, or `undefined` if the dialog was cancelled.
+   * The main process creates a uniquely-named subfolder beneath this path
+   * before writing — two consecutive exports never collide.
+   */
+  pickExportFolder(): Promise<string | undefined>;
+  /**
+   * Run an export end-to-end. Dispatches on the profile type:
+   *   - cassandra → CassandraService.exportTable/exportKeyspace/exportAll
+   *   - postgres  → PostgresService.exportTable/exportSchema/exportAll
+   *   - redis     → RedisAdapter.exportKey/exportPattern/exportAll
+   * The request shape is identical across engines; engine-specific fields
+   * (`redisDb`) are ignored when not relevant.
+   */
+  exportDatabase(request: ExportRequest): Promise<ExportResult>;
+  /**
+   * Reveal a folder (or any path) in the user's native file manager. Used by
+   * the post-export status bar's "Open folder" action so the user can jump
+   * straight to the dump they just produced.
+   */
+  openFolder(path: string): Promise<void>;
   setZoomFactor(factor: number): void;
   onFullscreenChange(callback: (fullscreen: boolean) => void): () => void;
   terminalCreate(options: { cwd?: string; cols?: number; rows?: number }): Promise<string>;
@@ -256,4 +283,7 @@ export const ipcChannels = {
   getUpdateStatus: "updater:get-status",
   checkForUpdates: "updater:check",
   installUpdate: "updater:install",
+  pickExportFolder: "export:pick-folder",
+  exportDatabase: "export:run",
+  openFolder: "export:open-folder",
 } as const;

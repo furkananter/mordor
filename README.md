@@ -15,6 +15,10 @@ Multi-database desktop workbench for macOS, Windows, and Linux.
 - Browse connections and their schemas/keyspaces/databases from a compact sidebar.
 - Select a table to auto-load schema and a `LIMIT 100` preview.
 - Per-engine workspace: CQL for Cassandra, SQL for Postgres, command palette for Redis.
+- **Export anywhere** — right-click a table, keyspace/schema, or Redis DB to dump it to a folder
+  with a replayable script (`schema.sql` / `data.sql` / `schema.cql` / `commands.txt`),
+  per-table CSV, and a JSON manifest. Use the toolbar Download button for a full-database
+  export. Restore with `psql -f`, `cqlsh -f`, or `redis-cli --pipe`.
 
 ## Development
 

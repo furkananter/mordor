@@ -356,6 +356,19 @@
     transition-delay: 75ms;
   }
 
+  /* Sidebar tree rows render eagerly and unvirtualized — a connected DB with
+   * hundreds/thousands of tables puts that many always-open nodes in the tree.
+   * Memoization stops React from *re-rendering* them, but the nodes still sit
+   * in the DOM, so a single :hover anywhere forced the browser into a
+   * document-wide style recalc (the "can't even hover a button" jank).
+   * content-visibility lets the engine skip style/layout/paint for the rows
+   * scrolled out of view; contain-intrinsic-size keeps the scrollbar honest so
+   * skipped rows still reserve their height. */
+  .tree-row {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 26px;
+  }
+
   .drag-region {
     -webkit-app-region: drag;
   }

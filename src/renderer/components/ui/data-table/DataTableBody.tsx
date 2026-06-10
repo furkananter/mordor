@@ -28,13 +28,12 @@ export function DataTableBody({
   table,
   columnCount,
   highlightRowIds,
-  onRowOpen
+  onRowClick
 }: {
   table: Table<Row>;
   columnCount: number;
   highlightRowIds?: ReadonlySet<string>;
-  /** Called with the row's stable id when it is clicked, to open its detail. */
-  onRowOpen?: (id: string) => void;
+  onRowClick?: (row: Row) => void;
 }) {
   const rows = table.getRowModel().rows;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -157,7 +156,7 @@ export function DataTableBody({
                   isFresh={highlightRowIds?.has(row.id) ?? false}
                   offsetY={virtualRow.start}
                   tableWidth={tableWidth}
-                  {...(onRowOpen ? { onOpen: onRowOpen } : {})}
+                  {...(onRowClick ? { onRowClick } : {})}
                 />
               );
             })
@@ -169,7 +168,7 @@ export function DataTableBody({
                 isSelected={row.getIsSelected()}
                 isFresh={highlightRowIds?.has(row.id) ?? false}
                 tableWidth={tableWidth}
-                {...(onRowOpen ? { onOpen: onRowOpen } : {})}
+                {...(onRowClick ? { onRowClick } : {})}
               />
             ))
           )}
@@ -195,14 +194,14 @@ const RenderedRow = memo(function RenderedRow({
   isFresh,
   offsetY,
   tableWidth,
-  onOpen
+  onRowClick
 }: {
   row: import("@tanstack/react-table").Row<Row>;
   isSelected: boolean;
   isFresh: boolean;
   offsetY?: number;
   tableWidth: number;
-  onOpen?: (id: string) => void;
+  onRowClick?: (row: Row) => void;
 }) {
   const style: React.CSSProperties =
     offsetY === undefined
@@ -218,23 +217,10 @@ const RenderedRow = memo(function RenderedRow({
   return (
     <TableRow
       data-state={isSelected ? "selected" : undefined}
-      // Fresh-row highlight is driven entirely by the `[data-fresh="true"]`
-      // CSS keyframe in styles.css — no per-row transition listener.
       data-fresh={isFresh ? "true" : undefined}
       style={style}
-      className={onOpen ? "cursor-pointer" : undefined}
-      title={onOpen ? "Click to view full row" : undefined}
-      onClick={
-        onOpen
-          ? (event) => {
-              // Don't hijack a click that the user made to select text, or one
-              // on an interactive cell control (the selection checkbox).
-              if (window.getSelection()?.toString()) return;
-              if ((event.target as HTMLElement).closest("input,button,a")) return;
-              onOpen(row.id);
-            }
-          : undefined
-      }
+      onClick={onRowClick ? () => onRowClick(row.original) : undefined}
+      className={onRowClick ? "cursor-pointer" : undefined}
     >
       {row.getVisibleCells().map((cell) => {
         if (cell.column.id === SELECT_COLUMN_ID) {

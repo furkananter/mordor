@@ -29,6 +29,8 @@ import {
   RedisKeyValue,
   RedisScanResult
 } from "../../core/ipc";
+import type { ExportResult } from "../../core/export/types";
+import { runRedisExport } from "./redis-exporter";
 
 interface RedisSession {
   client: RedisClient;
@@ -254,6 +256,71 @@ export class RedisAdapter implements DatabaseAdapter {
     } else {
       await client.set(key, value);
     }
+  }
+
+  /** Export a single Redis key. `profileName` is woven into the folder slug. */
+  async exportKey(
+    profileId: string,
+    profileName: string,
+    db: number,
+    key: string,
+    outputDir: string,
+  ): Promise<ExportResult> {
+    const client = await this.useDb(profileId, db);
+    const session = this.sessions.get(profileId)!;
+    return runRedisExport({
+      profileId,
+      profileName,
+      client,
+      outputDir,
+      db: session.currentDb,
+      target: key,
+      mode: "single-key",
+      scopeLabel: `key ${key}`,
+    });
+  }
+
+  /** Export keys matching a SCAN MATCH pattern (e.g. `user:*`). */
+  async exportPattern(
+    profileId: string,
+    profileName: string,
+    db: number,
+    pattern: string,
+    outputDir: string,
+  ): Promise<ExportResult> {
+    const client = await this.useDb(profileId, db);
+    const session = this.sessions.get(profileId)!;
+    return runRedisExport({
+      profileId,
+      profileName,
+      client,
+      outputDir,
+      db: session.currentDb,
+      target: pattern,
+      mode: "pattern",
+      scopeLabel: `pattern ${pattern}`,
+    });
+  }
+
+  /** Export every key in the selected DB. */
+  async exportAll(
+    profileId: string,
+    profileName: string,
+    db: number,
+    outputDir: string,
+  ): Promise<ExportResult> {
+    const client = await this.useDb(profileId, db);
+    const session = this.sessions.get(profileId)!;
+    return runRedisExport({
+      profileId,
+      profileName,
+      client,
+      outputDir,
+      db: session.currentDb,
+      target: "*",
+      mode: "all",
+      scopeLabel: `full DB ${db}`,
+    });
   }
 
   async runCommand(profileId: string, db: number, command: string): Promise<RedisCommandResult> {

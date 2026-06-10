@@ -33,6 +33,8 @@ import { splitCqlStatements } from "./cqlSplit";
 import { isSchemaChange, waitForSchemaAgreement } from "./migrations/MigrationExecutor";
 import { normalizeQuery, QueryMode } from "./query";
 import { serializeRows } from "./serialize";
+import { runCassandraExport } from "./exporter";
+import type { ExportResult } from "../export/types";
 
 export interface SchemaScriptStatementResult {
   index: number;
@@ -518,6 +520,55 @@ export class CassandraService {
         this.disconnect(profileId),
       ),
     );
+  }
+
+  /** Export a single table — schema + rows — into an `mordor-cassandra-*`
+   *  folder beneath `outputDir`. See `exporter.ts` for the file layout. */
+  async exportTable(
+    profileId: string,
+    keyspace: string,
+    table: string,
+    outputDir: string,
+  ): Promise<ExportResult> {
+    const conn = this.requireConnection(profileId);
+    return runCassandraExport({
+      profileId,
+      profileName: conn.profile.name,
+      client: conn.client,
+      outputDir,
+      keyspaceFilter: [keyspace],
+      tableFilter: [{ keyspace, table }],
+      scopeLabel: `table ${keyspace}.${table}`,
+    });
+  }
+
+  /** Export every table inside a single keyspace. */
+  async exportKeyspace(
+    profileId: string,
+    keyspace: string,
+    outputDir: string,
+  ): Promise<ExportResult> {
+    const conn = this.requireConnection(profileId);
+    return runCassandraExport({
+      profileId,
+      profileName: conn.profile.name,
+      client: conn.client,
+      outputDir,
+      keyspaceFilter: [keyspace],
+      scopeLabel: `keyspace ${keyspace}`,
+    });
+  }
+
+  /** Export every non-system keyspace + table on the connected cluster. */
+  async exportAll(profileId: string, outputDir: string): Promise<ExportResult> {
+    const conn = this.requireConnection(profileId);
+    return runCassandraExport({
+      profileId,
+      profileName: conn.profile.name,
+      client: conn.client,
+      outputDir,
+      scopeLabel: "full cluster",
+    });
   }
 
   private async fetchSchema(client: cassandra.Client): Promise<KeyspaceNode[]> {

@@ -4,6 +4,7 @@ import { ConnectionFormDialog } from "./features/connections/ConnectionFormDialo
 import { Sidebar } from "./features/sidebar/Sidebar";
 import { UpdateBanner } from "./features/updates/UpdateBanner";
 import { TerminalDrawer } from "./features/workspace/TerminalDrawer";
+import { ExportStatusBar } from "./features/export/ExportStatusBar";
 import { WorkspaceHeader } from "./features/workspace/WorkspaceHeader";
 import { WorkspaceRoutes } from "./features/workspace/WorkspaceRoutes";
 import { useAppShortcuts } from "./hooks/useAppShortcuts";
@@ -12,6 +13,7 @@ import { useFullscreen } from "./hooks/useFullscreen";
 import { useThemeSync } from "./hooks/useThemeSync";
 import { PerfZone } from "./lib/perf";
 import { useConnectionStore } from "./store/connection";
+import { useConnectivityStore } from "./store/connectivity";
 import { useLayoutStore } from "./store/layout";
 import { usePreferencesStore } from "./store/preferences";
 import { useRedisStore } from "./store/redis";
@@ -23,6 +25,7 @@ export function App() {
   // Stores
   const profiles = useConnectionStore((state) => state.profiles);
   const init = useConnectionStore((state) => state.init);
+  const reconnectProfiles = useConnectionStore((state) => state.reconnectProfiles);
   const detectLocal = useConnectionStore((state) => state.detectLocal);
   const createProfile = useConnectionStore((state) => state.createProfile);
   const updateProfile = useConnectionStore((state) => state.updateProfile);
@@ -62,25 +65,53 @@ export function App() {
 
   // Side effects + hooks
   useEffect(() => {
-    // Defer the profile fetch off the first paint. The Sidebar renders an
-    // empty list until profiles arrive a tick later, which keeps the initial
-    // commit small. requestIdleCallback when available, otherwise a tiny
-    // setTimeout so the IPC round-trip doesn't extend the first frame.
-    // Local detection is user-driven (Detect button) — running it on boot
-    // tarpits the app for 5-15 s on cold start when Docker / DB probes time
-    // out, which makes the packaged build feel broken.
     const idle = (window as unknown as {
       requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
       cancelIdleCallback?: (id: number) => void;
     });
+
+    async function boot() {
+      // 1. Load saved profiles.
+      await init();
+
+      // 2. Auto-reconnect profiles the user had open last session. Fires in
+      //    parallel and swallows individual failures so one unreachable host
+      //    doesn't block the others.
+      const { autoConnectIds } = useConnectivityStore.getState();
+      const savedProfiles = useConnectionStore.getState().profiles;
+      const toReconnect = autoConnectIds.filter((id) =>
+        savedProfiles.some((p) => p.id === id)
+      );
+      if (toReconnect.length > 0) {
+        await reconnectProfiles(toReconnect);
+      }
+
+      // 3. Restore the last open page. Navigate to the profile the user had
+      //    selected, and if it's now connected open the last table too.
+      const { lastProfileId, lastTable } = useLayoutStore.getState();
+      if (!lastProfileId) return;
+      const freshProfiles = useConnectionStore.getState().profiles;
+      const profile = freshProfiles.find((p) => p.id === lastProfileId);
+      if (!profile) return;
+
+      if (profile.connected && lastTable?.profileId === lastProfileId) {
+        await openTable(lastTable).catch(() => {
+          // Table may no longer exist — fall back to the cluster view.
+          selectProfile(lastProfileId);
+        });
+      } else {
+        selectProfile(lastProfileId);
+      }
+    }
+
     const handle = idle.requestIdleCallback
-      ? idle.requestIdleCallback(() => void init(), { timeout: 400 })
-      : window.setTimeout(() => void init(), 0);
+      ? idle.requestIdleCallback(() => void boot(), { timeout: 400 })
+      : window.setTimeout(() => void boot(), 0);
     return () => {
       if (idle.cancelIdleCallback && idle.requestIdleCallback) idle.cancelIdleCallback(handle);
       else window.clearTimeout(handle);
     };
-  }, [init]);
+  }, [init, reconnectProfiles, openTable, selectProfile]);
   useEffect(() => {
     // Same idle deferral pattern: the updater state machine pulls its initial
     // snapshot over IPC and subscribes to pushes. Pushed status changes drive
@@ -177,6 +208,10 @@ export function App() {
         {/* Update notice renders as a fixed toast (top-right) — no longer in
             normal flow, so it doesn't reflow the workspace when it appears. */}
         <UpdateBanner />
+
+        {/* Export progress / result / error — banner pattern mirrors the
+            error bar below so both live in the same row above the workspace. */}
+        <ExportStatusBar />
 
         {error ? (
           <div className="border-b border-danger/40 bg-danger/10 px-4 py-2 text-[12px] text-danger" role="alert">

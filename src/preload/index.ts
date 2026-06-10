@@ -111,6 +111,10 @@ const api: CassandraDeskApi = {
   getUpdateStatus: () => ipcRenderer.invoke(ipcChannels.getUpdateStatus),
   checkForUpdates: () => ipcRenderer.invoke(ipcChannels.checkForUpdates),
   installUpdate: () => ipcRenderer.invoke(ipcChannels.installUpdate),
+  pickExportFolder: () => ipcRenderer.invoke(ipcChannels.pickExportFolder),
+  exportDatabase: (request) =>
+    ipcRenderer.invoke(ipcChannels.exportDatabase, request),
+  openFolder: (path) => ipcRenderer.invoke(ipcChannels.openFolder, path),
   onUpdateStatus: (callback) => {
     // Main pushes `updater:status` on every lifecycle transition AND once per
     // attachWindow() so a freshly-mounted UI gets the current state without

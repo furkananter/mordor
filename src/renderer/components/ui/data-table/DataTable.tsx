@@ -9,7 +9,8 @@ import {
   getSortedRowModel,
   useReactTable
 } from "@tanstack/react-table";
-import { memo, useMemo, useState } from "react";
+import { Copy, X } from "lucide-react";
+import { memo, useCallback, useMemo, useState } from "react";
 import { usePreferencesStore } from "../../../store/preferences";
 import { EmptyState } from "../EmptyState";
 import { SkeletonTable } from "../Skeleton";
@@ -17,7 +18,6 @@ import { DataTableBody } from "./DataTableBody";
 import { DataTableFilters } from "./DataTableFilters";
 import { DataTablePagination } from "./DataTablePagination";
 import { DataTableToolbar, ToolbarDeleteConfig } from "./DataTableToolbar";
-import { RowDetailDrawer } from "./RowDetailDrawer";
 import { computeRowId, DataTablePayload, Row } from "./types";
 import { useDataTableColumns } from "./useDataTableColumns";
 
@@ -49,9 +49,7 @@ function DataTableImpl({
   enableSelection = false,
   deleteConfig,
   rowIdColumns,
-  highlightRowIds,
-  enableRowDetail = true,
-  detailTitle
+  highlightRowIds
 }: {
   result: DataTablePayload | undefined;
   loading: boolean;
@@ -66,20 +64,16 @@ function DataTableImpl({
   rowIdColumns?: string[];
   /** Row IDs to render with a highlight (e.g. recently arrived in live mode). */
   highlightRowIds?: ReadonlySet<string>;
-  /** When true (default), clicking a row opens the full-row detail drawer. */
-  enableRowDetail?: boolean;
-  /** Heading shown atop the row detail drawer (e.g. the table name). */
-  detailTitle?: string;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
-  // The open detail row is tracked by its stable row id, not its position —
-  // sorting, filtering, and live-poll all reorder/replace the row model, and a
-  // positional index would silently start pointing at a different record.
-  const [detailRowId, setDetailRowId] = useState<string | null>(null);
+  const [expandedRow, setExpandedRow] = useState<Row | null>(null);
+  const handleRowClick = useCallback((row: Row) => {
+    setExpandedRow((prev) => (prev === row ? null : row));
+  }, []);
   const preferredPageSize = usePreferencesStore((state) => state.pageSize);
   const effectivePageSize = pageSize ?? preferredPageSize;
 
@@ -123,7 +117,6 @@ function DataTableImpl({
     return <EmptyState title="No rows" body={emptyRowsBody} compact />;
   }
 
-  const displayedRows = table.getRowModel().rows;
   const filteredCount = table.getFilteredRowModel().rows.length;
   const toolbarDelete: ToolbarDeleteConfig | undefined = deleteConfig
     ? {
@@ -157,9 +150,17 @@ function DataTableImpl({
       <DataTableBody
         table={table}
         columnCount={columns.length}
+        onRowClick={handleRowClick}
         {...(highlightRowIds ? { highlightRowIds } : {})}
-        {...(enableRowDetail ? { onRowOpen: setDetailRowId } : {})}
       />
+
+      {expandedRow && result && (
+        <RowDetailPanel
+          row={expandedRow}
+          columns={result.columns}
+          onClose={() => setExpandedRow(null)}
+        />
+      )}
 
       <DataTablePagination table={table} />
 
@@ -172,28 +173,65 @@ function DataTableImpl({
         onClose={() => setFiltersOpen(false)}
         onClearAll={() => setColumnFilters([])}
       />
-
-      {enableRowDetail && detailRowId !== null
-        ? (() => {
-            const detailIndex = displayedRows.findIndex((row) => row.id === detailRowId);
-            // The row left the current view (filtered out, or removed by a live
-            // poll). Nothing to show — the drawer simply closes.
-            if (detailIndex < 0) return null;
-            return (
-              <RowDetailDrawer
-                rows={displayedRows.map((row) => row.original)}
-                index={detailIndex}
-                columns={result.columns}
-                {...(columnTypes ? { columnTypes } : {})}
-                {...(detailTitle ? { title: detailTitle } : {})}
-                onNavigate={(next) => setDetailRowId(displayedRows[next]?.id ?? null)}
-                onClose={() => setDetailRowId(null)}
-              />
-            );
-          })()
-        : null}
     </div>
   );
 }
 
 export const DataTable = memo(DataTableImpl);
+
+function RowDetailPanel({
+  row,
+  columns,
+  onClose
+}: {
+  row: Row;
+  columns: string[];
+  onClose(): void;
+}) {
+  return (
+    <div className="flex h-[240px] shrink-0 flex-col border-t border-line bg-panel-soft">
+      <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5">
+        <span className="text-[11px] font-medium text-muted">Row data</span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-0.5 text-subtle hover:bg-line-soft hover:text-text"
+          aria-label="Close row detail"
+        >
+          <X size={13} strokeWidth={1.7} />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <table className="w-full border-collapse font-mono text-[11.5px]">
+          <tbody>
+            {columns.map((col) => {
+              const value = row[col] ?? "";
+              return (
+                <tr key={col} className="group border-b border-line-soft/60 last:border-b-0 hover:bg-line-soft/40">
+                  <td className="w-[160px] max-w-[200px] shrink-0 select-none truncate px-3 py-1.5 align-top font-medium text-muted">
+                    {col}
+                  </td>
+                  <td className="px-3 py-1.5 align-top">
+                    <div className="flex items-start gap-2">
+                      <span className="flex-1 break-all text-text">{value === "" ? <span className="text-subtle italic">null</span> : value}</span>
+                      {value !== "" && (
+                        <button
+                          type="button"
+                          onClick={() => void navigator.clipboard.writeText(value)}
+                          className="mt-0.5 shrink-0 rounded p-0.5 text-subtle opacity-0 transition-opacity hover:text-text group-hover:opacity-100"
+                          aria-label={`Copy ${col}`}
+                        >
+                          <Copy size={11} strokeWidth={1.7} />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}

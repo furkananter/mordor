@@ -47,6 +47,10 @@ const config = {
   },
   asar: true,
   files: ["dist/**", "package.json"],
+  // Linux: wrap the product binary so --no-sandbox is applied on every launch
+  // path (direct ./App.AppImage run included), not just the .desktop entry.
+  // See build/after-pack.js for the full rationale.
+  afterPack: "./build/after-pack.js",
   extraResources: [
     {
       from: "media",
@@ -64,24 +68,38 @@ const config = {
   mac: {
     icon: "media/macos/AppIcon.icns",
     target: ["dmg", "zip"],
+    // With a real certificate, leave `identity` unset so electron-builder
+    // auto-selects the Developer ID Application identity it imported from
+    // CSC_LINK. Without one, force ad-hoc (`-`) so the app still launches.
+    ...(signMac ? {} : { identity: "-" }),
+    // Hardened runtime is mandatory for notarization; only enable it when we're
+    // actually signing (an ad-hoc build with hardened runtime fails to launch).
+    hardenedRuntime: signMac,
     gatekeeperAssess: false,
+    // node-pty keeps its native binaries in arch-named paths
+    // (bin/darwin-arm64-146/node-pty.node AND prebuilds/darwin-arm64/pty.node).
+    // When building the universal app, @electron/universal sees the arm64 copies
+    // left over in BOTH the x64 and arm64 slices, finds them byte-identical, and
+    // aborts ("Detected file ... the same in both x64 and arm64 builds and not
+    // covered by the x64ArchFiles rule"). The real per-arch binaries live in
+    // separate darwin-{x64,arm64} folders and node-pty picks the right one by
+    // process.arch at runtime, so the duplicates are harmless — whitelist the
+    // whole module so the lipo merge proceeds. keytar lipo-merges normally
+    // (single path, genuinely different per arch) and needs no entry here.
+    x64ArchFiles: "**/node-pty/**",
+    // Entitlements only apply to a real Developer ID signature. Passing them on
+    // the ad-hoc path makes electron-builder's codesign step fail with
+    // "... not a file" (the entitlements get fed to an ad-hoc sign that can't
+    // consume them), which is what broke the 0.5.8 mac release. Gate them behind
+    // signMac so unsigned/local builds keep the plain ad-hoc signature that
+    // worked through 0.5.5.
     ...(signMac
       ? {
-          // Real Developer ID certificate (CSC_LINK present): leave `identity`
-          // unset so electron-builder auto-selects the Developer ID Application
-          // identity it imported from CSC_LINK. Hardened runtime + entitlements
-          // are mandatory for notarization.
-          hardenedRuntime: true,
           entitlements: "build/entitlements.mac.plist",
           entitlementsInherit: "build/entitlements.mac.plist",
-          notarize: notarizeMac,
         }
-      : {
-          // No certificate: ad-hoc sign (`-`) so the app still launches —
-          // identical to the pre-signing config. No hardened runtime,
-          // entitlements, or notarization, all of which need a real identity.
-          identity: "-",
-        }),
+      : {}),
+    notarize: notarizeMac,
   },
   win: {
     icon: "media/macos/AppIcon512.png",
@@ -91,6 +109,9 @@ const config = {
     icon: "media/macos/AppIcon512.png",
     target: ["AppImage"],
     category: "Development",
+    // The --no-sandbox shim is applied by the afterPack hook above so it covers
+    // direct AppImage execution, not only desktop-entry launches. (executableArgs
+    // alone only patches the .desktop Exec= line and misses ./App.AppImage runs.)
   },
 };
 
