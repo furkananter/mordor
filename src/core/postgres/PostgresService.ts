@@ -324,7 +324,7 @@ export class PostgresService {
     const schema = await this.fetchTableSchema(table);
     const known = new Set(schema.columns.map((column) => column.name));
     const columns = Object.keys(values).filter(
-      (column) => known.has(column) && (values[column] ?? "") !== "",
+      (column) => known.has(column) && (values[column] ?? "").trim() !== "",
     );
     if (columns.length === 0) {
       throw new Error("No column values provided to insert.");

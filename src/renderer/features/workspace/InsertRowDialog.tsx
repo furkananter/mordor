@@ -42,7 +42,13 @@ export function InsertRowDialog({
   }, [open]);
 
   const handleSubmit = async () => {
-    const missing = [...keyColumns].filter((column) => !(values[column] ?? "").trim());
+    // Trim every field up front so validation and the actual insert agree —
+    // otherwise " value " passes the (trimmed) key check but gets written with
+    // its surrounding spaces, silently baking whitespace into primary keys.
+    const trimmedValues = Object.fromEntries(
+      Object.entries(values).map(([key, value]) => [key, value.trim()])
+    );
+    const missing = [...keyColumns].filter((column) => !trimmedValues[column]);
     if (missing.length > 0) {
       setError(`Primary key column${missing.length === 1 ? "" : "s"} required: ${missing.join(", ")}.`);
       return;
@@ -50,7 +56,7 @@ export function InsertRowDialog({
     setSubmitting(true);
     setError(undefined);
     try {
-      await window.cassandraDesk.insertTableRow(schema.table, values);
+      await window.cassandraDesk.insertTableRow(schema.table, trimmedValues);
       onOpenChange(false);
       onInserted();
     } catch (caught) {
