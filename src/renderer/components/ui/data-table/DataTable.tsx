@@ -72,10 +72,25 @@ function DataTableImpl({
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [expandedRow, setExpandedRow] = useState<Row | null>(null);
-  const handleRowClick = useCallback((row: Row) => {
-    setExpandedRow((prev) => (prev === row ? null : row));
-  }, []);
+  // Track the expanded row by a stable key (its primary key when available),
+  // not by object reference. Live-mode refreshes replace every row object, so a
+  // reference would either drop the panel or, worse, keep showing a stale
+  // snapshot — keying by id lets us re-resolve the current row each render.
+  const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
+  const rowKeyOf = useCallback(
+    (row: Row) =>
+      rowIdColumns && rowIdColumns.length > 0
+        ? computeRowId(row, rowIdColumns, JSON.stringify(row))
+        : JSON.stringify(row),
+    [rowIdColumns]
+  );
+  const handleRowClick = useCallback(
+    (row: Row) => {
+      const key = rowKeyOf(row);
+      setExpandedRowKey((prev) => (prev === key ? null : key));
+    },
+    [rowKeyOf]
+  );
   const preferredPageSize = usePreferencesStore((state) => state.pageSize);
   const effectivePageSize = pageSize ?? preferredPageSize;
 
@@ -108,6 +123,14 @@ function DataTableImpl({
   });
 
   const selectedRowsCount = useMemo(() => Object.values(rowSelection).filter(Boolean).length, [rowSelection]);
+
+  // Resolve the live row object for the expanded key on every render, so the
+  // detail panel always reflects the latest values (and closes itself if the
+  // row disappears after a filter or live refresh).
+  const expandedRow = useMemo(() => {
+    if (!expandedRowKey || !result) return null;
+    return result.rows.find((row) => rowKeyOf(row) === expandedRowKey) ?? null;
+  }, [expandedRowKey, result, rowKeyOf]);
 
   if (loading) {
     return <SkeletonTable rows={Math.min(effectivePageSize, 12)} columns={result?.columns.length ?? 5} />;
@@ -161,7 +184,7 @@ function DataTableImpl({
           row={expandedRow}
           columns={result.columns}
           {...(columnTypes ? { columnTypes } : {})}
-          onClose={() => setExpandedRow(null)}
+          onClose={() => setExpandedRowKey(null)}
         />
       )}
 

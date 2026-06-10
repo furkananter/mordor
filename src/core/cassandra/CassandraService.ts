@@ -415,11 +415,18 @@ export class CassandraService {
     values: Record<string, string>,
   ): Promise<{ inserted: number }> {
     const { existing, typeByColumn, keyColumns } = await this.resolveWriteContext(table);
-    // Keep only real columns the user gave a value for. Empty inputs are
-    // dropped rather than written as null so the row stays minimal.
-    const columns = Object.keys(values).filter(
-      (column) => typeByColumn.has(column) && (values[column] ?? "").trim() !== "",
-    );
+    // Keep only the columns the user gave a value for. Empty inputs are dropped
+    // rather than written as null so the row stays minimal.
+    const columns = Object.keys(values).filter((column) => (values[column] ?? "").trim() !== "");
+    // A non-empty value for a column the table doesn't have means the caller's
+    // schema is stale (the dialog was opened before an ALTER). Fail fast so the
+    // user refreshes, instead of silently inserting a partial row.
+    const unknownColumns = columns.filter((column) => !typeByColumn.has(column));
+    if (unknownColumns.length > 0) {
+      throw new Error(
+        `Cannot insert into ${table.keyspace}.${table.table}: unknown column(s) — ${unknownColumns.join(", ")}. Refresh the schema and try again.`,
+      );
+    }
     // Trim matches the renderer's own required-field check so a whitespace-only
     // key is rejected here with a clear message instead of failing deep in the
     // driver's type coercion.
@@ -627,23 +634,24 @@ function coerceForCassandra(raw: string, cqlType: string): unknown {
       );
     }
   }
-  if (
-    type === "int" ||
-    type === "smallint" ||
-    type === "tinyint" ||
-    type === "varint" ||
-    type === "counter"
-  ) {
+  // Only the fixed-width integer types are safe to parse via Number; varint and
+  // counter can exceed Number.MAX_SAFE_INTEGER and would silently lose precision.
+  if (type === "int" || type === "smallint" || type === "tinyint") {
     const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) throw new Error(`Invalid integer value for ${cqlType}: ${raw}`);
+    if (!Number.isInteger(parsed)) throw new Error(`Invalid integer value for ${cqlType}: ${raw}`);
     return parsed;
   }
   // From here on we touch the driver's type helpers. Safe to use driverSync()
   // because deleteRows/runQuery are only callable after a successful connect,
   // which loaded the driver module.
   const types = driverSync().types;
-  if (type === "bigint") {
+  if (type === "bigint" || type === "counter") {
+    // Long is the arbitrary-width 64-bit carrier the driver expects for both.
     return types.Long.fromString(raw);
+  }
+  if (type === "varint") {
+    // varint is unbounded; Integer preserves the full magnitude.
+    return types.Integer.fromString(raw);
   }
   if (type === "double" || type === "float" || type === "decimal") {
     const parsed = Number(raw);
