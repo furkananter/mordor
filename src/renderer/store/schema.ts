@@ -137,6 +137,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
   reloadSelectedTable: async () => {
     const selected = get().selectedTable;
     if (selected) {
+      previewCache.delete(cacheKey(selected));
       await get().openTable(selected);
     }
   },
