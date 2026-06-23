@@ -12,11 +12,13 @@ export const LIVE_INTERVAL_OPTIONS_MS = [
   1000, 2000, 5000, 10000, 30000,
 ] as const;
 export type LiveIntervalMs = (typeof LIVE_INTERVAL_OPTIONS_MS)[number];
-// 2s was aggressive on release builds: every tick replaced the preview, which
-// triggered a full TanStack re-render of ~500 DOM rows and ate ~50% of the
-// main thread, freezing sidebar interactions. 5s gives the thread breathing
-// room; users who genuinely need faster polling can drop it from the select.
-export const DEFAULT_LIVE_INTERVAL_MS: LiveIntervalMs = 5000;
+// 2s is the default now that the live tick only commits a re-render when the
+// fetched page actually differs (previewsEqual guard in refreshPreviewSilent).
+// An idle table costs one cheap diff per tick and zero React work; the heavy
+// re-render the old 5s default was avoiding only happens when data really
+// changed — which is exactly when you want to see it. Users can still drop to
+// 1s or back off to 30s from the select.
+export const DEFAULT_LIVE_INTERVAL_MS: LiveIntervalMs = 2000;
 
 export const FONT_SCALE_FACTORS: Record<FontScale, number> = {
   small: 0.9,

@@ -25,7 +25,7 @@ export function DataPanel({
   const liveIntervalMs = usePreferencesStore((state) => state.liveIntervalMs);
   const setLiveIntervalMs = usePreferencesStore((state) => state.setLiveIntervalMs);
   const reloadSelectedTable = useSchemaStore((state) => state.reloadSelectedTable);
-  const refreshPreviewLive = useSchemaStore((state) => state.refreshPreviewLive);
+  const refreshPreview = useSchemaStore((state) => state.refreshPreviewSilent);
   const loadMorePreview = useSchemaStore((state) => state.loadMorePreview);
   const loadAllPreview = useSchemaStore((state) => state.loadAllPreview);
   const previewLoadingMore = useSchemaStore((state) => state.previewLoadingMore);
@@ -53,7 +53,7 @@ export function DataPanel({
   const { lastTickAt, pending } = useLivePolling({
     enabled: liveEnabled && Boolean(schema),
     intervalMs: liveIntervalMs,
-    onTick: refreshPreviewLive,
+    onTick: refreshPreview,
     key: tableKey
   });
 

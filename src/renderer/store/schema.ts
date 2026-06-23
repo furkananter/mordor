@@ -62,12 +62,10 @@ interface SchemaActions {
   openTable(table: TableIdentity): Promise<void>;
   selectProfile(profileId: string): void;
   reloadSelectedTable(): Promise<void>;
+  /** Live-mode tick: re-fetches the first page and swaps it in only when it
+   *  actually differs, so inserts, updates AND deletes all surface. The
+   *  previewsEqual guard means an unchanged table costs nothing per tick. */
   refreshPreviewSilent(): Promise<void>;
-  /** Live-mode tick: fetches the first page and prepends genuinely new rows at the
-   *  top of the current preview instead of replacing it, so loaded-all data is
-   *  preserved and new arrivals appear immediately at the top. Falls back to
-   *  refreshPreviewSilent when no PK columns are known. */
-  refreshPreviewLive(): Promise<void>;
   loadMorePreview(): Promise<void>;
   loadAllPreview(): Promise<void>;
   clearTable(): void;
@@ -210,6 +208,14 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
     const selected = get().selectedTable;
     if (!selected) return;
     try {
+      // Re-fetch the live first page and swap it in wholesale. A full replace is
+      // what lets updates and deletes show — the old "prepend only new PKs"
+      // approach left edited rows showing stale values and deleted rows lingering
+      // until an app restart. previewsEqual skips the React commit when nothing
+      // changed, so an idle table is free even at a fast poll interval.
+      // ponytail: live mode tracks the first page; rows loaded via "Load more"/
+      // "Load all" collapse back to page one on the next tick — acceptable, you
+      // don't bulk-load and live-watch the same table at once.
       const next = await window.cassandraDesk.getPreview(selected);
       if (!sameTable(get().selectedTable, selected)) return;
       const current = get().preview;
@@ -218,54 +224,6 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       setPreviewCache(selected, next);
     } catch {
       // Live polling failures are silent — keep prior preview, surface nothing.
-    }
-  },
-
-  refreshPreviewLive: async () => {
-    const selected = get().selectedTable;
-    const schema = get().schema;
-    if (!selected) return;
-
-    const pkColumns = schema ? [...schema.partitionKeys, ...schema.clusteringKeys] : [];
-    if (pkColumns.length === 0) {
-      // No PK info yet — fall back to the standard silent refresh.
-      return get().refreshPreviewSilent();
-    }
-
-    try {
-      const next = await window.cassandraDesk.getPreview(selected);
-      if (!sameTable(get().selectedTable, selected)) return;
-
-      const current = get().preview;
-      if (!current || current.rows.length === 0) {
-        set({ preview: next });
-        setPreviewCache(selected, next);
-        return;
-      }
-
-      // Build the set of PK fingerprints already in our preview.
-      const existingKeys = new Set(
-        current.rows.map((row) => pkColumns.map((col) => row[col] ?? "").join("\x00"))
-      );
-
-      // Rows from the fresh first-page that aren't already present.
-      const newRows = next.rows.filter(
-        (row) => !existingKeys.has(pkColumns.map((col) => row[col] ?? "").join("\x00"))
-      );
-
-      if (newRows.length === 0) return;
-
-      // Prepend new arrivals at the top; keep all previously-loaded rows intact.
-      const merged: PreviewRowsPayload = {
-        columns: current.columns,
-        rows: [...newRows, ...current.rows],
-        limit: current.limit,
-      };
-      if (current.pageState) merged.pageState = current.pageState;
-      set({ preview: merged });
-      setPreviewCache(selected, merged);
-    } catch {
-      // Silent failure — keep prior preview.
     }
   },
 
