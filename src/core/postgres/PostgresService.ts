@@ -443,8 +443,8 @@ export class PostgresService {
       .join(" AND ");
     const sql = `DELETE FROM ${quoteQualified(table.keyspace, table.table)} WHERE ${whereClause}`;
     let deleted = 0;
-    await existing.client.query("BEGIN");
     try {
+      await existing.client.query("BEGIN");
       for (const row of rows) {
         const params = keyColumns.map((column) => row[column] ?? "");
         const result = await existing.client.query(sql, params);
@@ -452,7 +452,14 @@ export class PostgresService {
       }
       await existing.client.query("COMMIT");
     } catch (error) {
-      await existing.client.query("ROLLBACK");
+      // Swallow any ROLLBACK failure so the original error (the real cause) is
+      // the one rethrown — the connection may already be in a failed-tx state.
+      // Mirrors the defensive rollback in runSchemaScript.
+      try {
+        await existing.client.query("ROLLBACK");
+      } catch {
+        // Nothing more we can do; surface the original failure.
+      }
       throw error;
     }
     return { deleted };
