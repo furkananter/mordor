@@ -22,6 +22,7 @@ import {
   DatabaseAdapter,
   DetectedConnection
 } from "../../core/db/types";
+import type { SshTunnelManager } from "../../core/db/sshTunnel";
 import {
   RedisCommandResult,
   RedisDbStat,
@@ -35,6 +36,8 @@ import { runRedisExport } from "./redis-exporter";
 interface RedisSession {
   client: RedisClient;
   currentDb: number;
+  /** Whether this session was opened through an SSH tunnel (for teardown). */
+  ssh: boolean;
 }
 
 const LOCAL_REDIS_CANDIDATES = [
@@ -49,6 +52,10 @@ export class RedisAdapter implements DatabaseAdapter {
 
   private readonly sessions = new Map<string, RedisSession>();
 
+  // Optional SSH tunnel manager. When `profile.ssh` is set, connect forwards a
+  // local port through the bastion and points ioredis at it.
+  constructor(private readonly sshTunnel?: SshTunnelManager) {}
+
   async connect(profile: ConnectionProfileWithPassword): Promise<AdapterConnectResult> {
     if (profile.type !== "redis") {
       throw new Error("RedisAdapter received non-Redis profile.");
@@ -57,10 +64,21 @@ export class RedisAdapter implements DatabaseAdapter {
     const existing = this.sessions.get(profile.id);
     if (existing) return { schema: { kind: "redis" } };
 
+    let host = profile.host;
+    let port = profile.port;
+    if (profile.ssh && this.sshTunnel) {
+      const endpoint = await this.sshTunnel.open(profile.id, profile.ssh, {
+        host: profile.host,
+        port: profile.port,
+      });
+      host = endpoint.host;
+      port = endpoint.port;
+    }
+
     const Redis = await loadRedis();
     const client = new Redis({
-      host: profile.host,
-      port: profile.port,
+      host,
+      port,
       db: profile.db,
       username: profile.username,
       password: profile.password,
@@ -78,10 +96,12 @@ export class RedisAdapter implements DatabaseAdapter {
       await client.ping();
     } catch (caught) {
       client.disconnect();
+      // Connect failed — tear the bastion tunnel down so it doesn't leak.
+      if (profile.ssh && this.sshTunnel) await this.sshTunnel.close(profile.id);
       throw caught instanceof Error ? caught : new Error(String(caught));
     }
 
-    this.sessions.set(profile.id, { client, currentDb: profile.db });
+    this.sessions.set(profile.id, { client, currentDb: profile.db, ssh: Boolean(profile.ssh) });
     return { schema: { kind: "redis" } };
   }
 
@@ -93,6 +113,9 @@ export class RedisAdapter implements DatabaseAdapter {
       await session.client.quit();
     } catch {
       session.client.disconnect();
+    }
+    if (session.ssh && this.sshTunnel) {
+      await this.sshTunnel.close(profileId);
     }
   }
 

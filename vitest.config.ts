@@ -1,8 +1,18 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react({})],
+  resolve: {
+    alias: {
+      // `ssh2` is a production-only dependency (the SSH tunnel manager loads it
+      // lazily) and is not installed in the test environment. Alias it to a
+      // local stub so Vite can resolve the dynamic import when it walks the
+      // module graph; SshTunnel tests mock the real surface via `vi.mock`.
+      ssh2: fileURLToPath(new URL("./test/stubs/ssh2.ts", import.meta.url))
+    }
+  },
   define: {
     __APP_VERSION__: JSON.stringify("test"),
     // The main-process updater references this build-time flag; tests run

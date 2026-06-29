@@ -7,6 +7,7 @@ import type * as pg from "pg";
 // helper when MongoDB lands and we generalize.
 import { splitCqlStatements } from "../cassandra/cqlSplit";
 import { ConnectionProfileWithPassword } from "../config/profile";
+import type { SshTunnelManager } from "../db/sshTunnel";
 import {
   ColumnMetadata,
   PreviewRowsPayload,
@@ -101,6 +102,11 @@ const HIDDEN_SCHEMA_NAMES = new Set([
 export class PostgresService {
   private readonly connections = new Map<string, ActiveConnection>();
 
+  // Optional SSH tunnel manager — see CassandraService. When `profile.ssh` is
+  // set, connect dials a local-forwarded port through the bastion instead of
+  // the real host.
+  constructor(private readonly sshTunnel?: SshTunnelManager) {}
+
   isConnected(profileId: string): boolean {
     return this.connections.has(profileId);
   }
@@ -118,8 +124,18 @@ export class PostgresService {
     const existing = this.connections.get(profile.id);
     if (existing) return existing.schemas;
 
+    // Open the SSH tunnel (if configured) and aim the pg client at the local
+    // forwarded endpoint instead of the real host.
+    let endpointOverride: { host: string; port: number } | undefined;
+    if (profile.ssh && this.sshTunnel) {
+      endpointOverride = await this.sshTunnel.open(profile.id, profile.ssh, {
+        host: profile.host,
+        port: profile.port,
+      });
+    }
+
     const driver = await getDriver();
-    const client = new driver.Client(buildClientConfig(profile));
+    const client = new driver.Client(buildClientConfig(profile, endpointOverride));
     // Resolve the effective username for error messages. pg falls back to
     // `process.env.USER` when neither the config nor PGUSER is set, which
     // surprises everyone running a default Docker postgres ("why is it trying
@@ -156,6 +172,8 @@ export class PostgresService {
           // Nothing useful to do — original error is what the user needs to see.
         }
       }
+      // Connect failed — tear down the bastion tunnel so it doesn't leak.
+      if (profile.ssh && this.sshTunnel) await this.sshTunnel.close(profile.id);
       throw translateConnectError(caught, profile, effectiveUser);
     }
   }
@@ -168,6 +186,9 @@ export class PostgresService {
       await existing.client.end();
     } catch {
       // Driver may already be closed; nothing to do.
+    }
+    if (existing.profile.ssh && this.sshTunnel) {
+      await this.sshTunnel.close(profileId);
     }
   }
 
@@ -714,13 +735,18 @@ export function isHiddenSchemaName(name: string): boolean {
   return false;
 }
 
-function buildClientConfig(profile: ConnectionProfileWithPassword): pg.ClientConfig {
+function buildClientConfig(
+  profile: ConnectionProfileWithPassword,
+  endpointOverride?: { host: string; port: number },
+): pg.ClientConfig {
   if (profile.type !== "postgres") {
     throw new Error(`buildClientConfig called for non-postgres profile ${profile.id}.`);
   }
   const config: pg.ClientConfig = {
-    host: profile.host,
-    port: profile.port,
+    // When tunnelled, connect to the local forwarded endpoint instead of the
+    // real host/port (the SSH tunnel relays to the actual server).
+    host: endpointOverride?.host ?? profile.host,
+    port: endpointOverride?.port ?? profile.port,
     database: profile.database,
     // pg's SASL/SCRAM auth path crashes with "client password must be a string"
     // when this is undefined, even if the server is configured for trust auth
