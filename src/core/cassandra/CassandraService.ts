@@ -1,3 +1,4 @@
+import { checkServerIdentity } from "node:tls";
 import type * as cassandra from "cassandra-driver";
 import {
   ColumnMetadata,
@@ -128,6 +129,7 @@ export class CassandraService {
     // those peer addresses are cluster-internal and out of scope for v1 SSH).
     let contactPoints = profile.contactPoints;
     let port = profile.port;
+    let tunnelServername: string | undefined;
     if (profile.ssh && this.sshTunnel) {
       const firstPoint = profile.contactPoints[0];
       if (!firstPoint) throw new Error("Cassandra profile has no contact points to tunnel.");
@@ -137,6 +139,9 @@ export class CassandraService {
       });
       contactPoints = [endpoint.host];
       port = endpoint.port;
+      // We now dial 127.0.0.1, but the node's certificate is issued for the
+      // real contact point — remember it so TLS verifies against the real host.
+      tunnelServername = firstPoint;
     }
 
     const clientOptions: cassandra.ClientOptions = {
@@ -161,7 +166,18 @@ export class CassandraService {
     }
 
     if (profile.useTls) {
-      clientOptions.sslOptions = {};
+      const sslOptions: cassandra.ClientOptions["sslOptions"] = {};
+      if (tunnelServername) {
+        // SNI for the handshake, plus pin the certificate identity check to the
+        // real contact point: the socket connects to 127.0.0.1 so the driver's
+        // default checkServerIdentity would verify the cert against "127.0.0.1"
+        // and reject a cert issued for the real host. Verify against the real
+        // contact point instead.
+        sslOptions.servername = tunnelServername;
+        sslOptions.checkServerIdentity = (_host, cert) =>
+          checkServerIdentity(tunnelServername!, cert);
+      }
+      clientOptions.sslOptions = sslOptions;
     }
 
     const client = new driver.Client(clientOptions);

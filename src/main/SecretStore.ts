@@ -81,6 +81,24 @@ export class SecretStore {
       keytar.deletePassword(serviceName, secretKeyForSshPassphrase(profileId)),
     ]);
   }
+
+  /**
+   * Clear the SSH secret that does NOT belong to the current auth kind so a
+   * switch (password<->key) doesn't leave the previous kind's secret stranded
+   * in the keychain. "password" auth uses the bastion password; "key" auth uses
+   * the private-key passphrase — each kind's secret is meaningless to the other.
+   */
+  async clearMismatchedSshSecret(
+    profileId: string,
+    kind: "password" | "key",
+  ): Promise<void> {
+    const keytar = await getKeytar();
+    const staleKey =
+      kind === "password"
+        ? secretKeyForSshPassphrase(profileId)
+        : secretKeyForSshPassword(profileId);
+    await keytar.deletePassword(serviceName, staleKey);
+  }
 }
 
 export { serviceName as keychainServiceName };

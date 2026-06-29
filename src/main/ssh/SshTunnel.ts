@@ -44,7 +44,11 @@ const CONNECT_TIMEOUT_MS = 15000;
  * reuse / tear down the right one. `close` is idempotent.
  */
 export class SshTunnel {
-  private readonly tunnels = new Map<string, ActiveTunnel>();
+  // Each entry holds the in-flight (or settled) Promise<ActiveTunnel> rather
+  // than the resolved tunnel: caching the Promise *before* awaiting it means
+  // two concurrent opens for the same profileId reuse one connection instead
+  // of racing past the map read and each leaking their own tunnel.
+  private readonly tunnels = new Map<string, Promise<ActiveTunnel>>();
 
   isOpen(profileId: string): boolean {
     return this.tunnels.has(profileId);
@@ -61,8 +65,29 @@ export class SshTunnel {
     target: TunnelTarget,
   ): Promise<LocalEndpoint> {
     const existing = this.tunnels.get(profileId);
-    if (existing) return existing.endpoint;
+    if (existing) return (await existing).endpoint;
 
+    // Cache the in-flight Promise immediately so a concurrent open() for the
+    // same profile awaits this one instead of building a second tunnel. Drop
+    // it on failure so a later open() can retry rather than reusing a rejection.
+    const pending = this.buildTunnel(profileId, ssh, target);
+    this.tunnels.set(profileId, pending);
+    try {
+      const tunnel = await pending;
+      return tunnel.endpoint;
+    } catch (caught) {
+      if (this.tunnels.get(profileId) === pending) {
+        this.tunnels.delete(profileId);
+      }
+      throw caught;
+    }
+  }
+
+  private async buildTunnel(
+    profileId: string,
+    ssh: SshConfig,
+    target: TunnelTarget,
+  ): Promise<ActiveTunnel> {
     const ssh2 = await loadSsh2();
     const config = await buildConnectConfig(ssh);
     const client = new ssh2.Client();
@@ -77,26 +102,40 @@ export class SshTunnel {
       throw new Error("Failed to allocate a local SSH-tunnel port.");
     }
     const endpoint: LocalEndpoint = { host: "127.0.0.1", port: address.port };
+    const tunnel: ActiveTunnel = { client, server, endpoint };
 
     // If the SSH connection drops underneath us, tear the local server down so
     // the DB client fails fast instead of hanging on a dead forward.
     client.on("close", () => {
-      const tunnel = this.tunnels.get(profileId);
-      if (tunnel && tunnel.client === client) {
-        this.tunnels.delete(profileId);
-        tunnel.server.close();
-      }
+      const entry = this.tunnels.get(profileId);
+      if (entry === undefined) return;
+      // Only evict our own entry: a re-open may have replaced it since.
+      void entry.then(
+        (active) => {
+          if (active === tunnel && this.tunnels.get(profileId) === entry) {
+            this.tunnels.delete(profileId);
+            active.server.close();
+          }
+        },
+        () => {},
+      );
     });
 
-    this.tunnels.set(profileId, { client, server, endpoint });
-    return endpoint;
+    return tunnel;
   }
 
   /** Tear down the tunnel for `profileId`, if any. Idempotent. */
   async close(profileId: string): Promise<void> {
-    const tunnel = this.tunnels.get(profileId);
-    if (!tunnel) return;
+    const pending = this.tunnels.get(profileId);
+    if (!pending) return;
     this.tunnels.delete(profileId);
+    let tunnel: ActiveTunnel;
+    try {
+      tunnel = await pending;
+    } catch {
+      // The open never completed — nothing to tear down.
+      return;
+    }
     await new Promise<void>((resolve) => tunnel.server.close(() => resolve()));
     tunnel.client.end();
   }

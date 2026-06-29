@@ -55,10 +55,12 @@ class FakeSshClient {
 
 let lastClient: FakeSshClient | undefined;
 let nextFailure: Error | undefined;
+let clientCount = 0;
 
 vi.mock("ssh2", () => ({
   Client: class {
     constructor() {
+      clientCount += 1;
       lastClient = new FakeSshClient();
       if (nextFailure) lastClient.failConnectWith = nextFailure;
       return lastClient as unknown as object;
@@ -79,6 +81,7 @@ const passwordSsh: SshConfig = {
 afterEach(() => {
   lastClient = undefined;
   nextFailure = undefined;
+  clientCount = 0;
 });
 
 describe("SshTunnel", () => {
@@ -122,6 +125,35 @@ describe("SshTunnel", () => {
     // No second client was constructed.
     expect(lastClient).toBe(firstClient);
     await tunnel.close("p1");
+  });
+
+  it("reuses a single tunnel for concurrent opens of the same profile", async () => {
+    const tunnel = new SshTunnel();
+    // Fire both opens before the first awaits resolve — the in-flight Promise
+    // must be cached so the second open reuses it instead of dialing a second
+    // bastion connection and leaking a tunnel.
+    const [a, b] = await Promise.all([
+      tunnel.open("p1", passwordSsh, { host: "db", port: 1 }),
+      tunnel.open("p1", passwordSsh, { host: "db", port: 1 }),
+    ]);
+    expect(a).toEqual(b);
+    // Exactly one ssh2 client constructed despite two concurrent opens.
+    expect(clientCount).toBe(1);
+    await tunnel.close("p1");
+  });
+
+  it("retries after a failed open instead of caching the rejection", async () => {
+    nextFailure = new Error("auth failed");
+    const tunnel = new SshTunnel();
+    await expect(
+      tunnel.open("p3", passwordSsh, { host: "db", port: 1 }),
+    ).rejects.toThrow("auth failed");
+    // The failed in-flight entry was evicted, so the profile can be opened.
+    expect(tunnel.isOpen("p3")).toBe(false);
+    nextFailure = undefined;
+    const endpoint = await tunnel.open("p3", passwordSsh, { host: "db", port: 1 });
+    expect(endpoint.host).toBe("127.0.0.1");
+    await tunnel.close("p3");
   });
 
   it("close is idempotent for an unknown profile", async () => {

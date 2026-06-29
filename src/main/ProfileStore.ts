@@ -101,10 +101,19 @@ export class ProfileStore {
     if (!merged.ssh) {
       // SSH was removed (or never present) — clear any stale bastion secrets.
       await this.secrets.deleteSshSecrets(profileId);
-    } else if (sshSecrets.password || sshSecrets.passphrase) {
-      // Only overwrite when the user re-entered a secret. A blank field on edit
-      // means "keep the stored one" (same semantics as the DB password).
-      await this.secrets.setSshSecrets(profileId, sshSecrets);
+    } else {
+      // Drop the secret belonging to the *other* auth kind so flipping
+      // password<->key doesn't strand the previous kind's secret (which a
+      // later getWithPassword would otherwise re-attach to the wrong auth).
+      await this.secrets.clearMismatchedSshSecret(
+        profileId,
+        merged.ssh.auth.kind,
+      );
+      if (sshSecrets.password || sshSecrets.passphrase) {
+        // Only overwrite when the user re-entered a secret. A blank field on
+        // edit means "keep the stored one" (same semantics as the DB password).
+        await this.secrets.setSshSecrets(profileId, sshSecrets);
+      }
     }
     return merged;
   }

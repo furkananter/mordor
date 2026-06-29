@@ -763,6 +763,13 @@ function buildClientConfig(
     // or "encrypted but unverified" (explicit override via sslMode=require).
     const strict = profile.sslMode !== "require";
     config.ssl = { rejectUnauthorized: strict };
+    // When tunnelled we dial 127.0.0.1, but the server's certificate is issued
+    // for the real host — hand TLS the real hostname as `servername` (SNI +
+    // certificate identity check) so strict verification matches against the
+    // profile host instead of the loopback endpoint and fails spuriously.
+    if (endpointOverride && strict) {
+      config.ssl.servername = profile.host;
+    }
   }
   return config;
 }
