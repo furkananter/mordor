@@ -108,6 +108,16 @@ export function createSchemaHandlers(
       if (profile.type === "postgres") return postgres.insertRow(table, values);
       throw unsupported("insertTableRow", profile);
     },
+    [ipcChannels.updateTableRow]: async (
+      table: TableIdentity,
+      keys: Record<string, string>,
+      values: Record<string, string>,
+    ) => {
+      const profile = await requireProfile(table.profileId);
+      if (profile.type === "cassandra") return cassandra.updateRow(table, keys, values);
+      if (profile.type === "postgres") return postgres.updateRow(table, keys, values);
+      throw unsupported("updateTableRow", profile);
+    },
     [ipcChannels.getTableDdl]: async (table: TableIdentity) => {
       const profile = await requireProfile(table.profileId);
       if (profile.type === "cassandra") return cassandra.fetchTableDdl(table);

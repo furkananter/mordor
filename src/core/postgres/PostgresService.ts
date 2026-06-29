@@ -337,6 +337,68 @@ export class PostgresService {
     return { inserted: 1 };
   }
 
+  /**
+   * Update a single existing row, identified by its original primary key values
+   * (`keys`). Primary-key columns are kept read-only by the renderer, so only
+   * non-key columns appear in `values`. An empty string clears the column to NULL,
+   * matching the insert form's "blank = null" convention and the Cassandra path.
+   */
+  async updateRow(
+    table: TableIdentity,
+    keys: Record<string, string>,
+    values: Record<string, string>,
+  ): Promise<{ updated: number }> {
+    const existing = this.requireConnection(table.profileId);
+    const schema = await this.fetchTableSchema(table);
+    const known = new Set(schema.columns.map((column) => column.name));
+    const keyColumns = schema.partitionKeys;
+    if (keyColumns.length === 0) {
+      throw new Error(
+        `Cannot update rows in ${table.keyspace}.${table.table}: no primary key found to identify the row.`,
+      );
+    }
+    const keySet = new Set(keyColumns);
+    const illegalKeyUpdates = Object.keys(values).filter((column) => keySet.has(column));
+    if (illegalKeyUpdates.length > 0) {
+      throw new Error(
+        `Cannot update primary key column(s) — ${illegalKeyUpdates.join(", ")}.`,
+      );
+    }
+    const unknownColumns = Object.keys(values).filter((column) => !known.has(column));
+    if (unknownColumns.length > 0) {
+      throw new Error(
+        `Cannot update ${table.keyspace}.${table.table}: unknown column(s) — ${unknownColumns.join(", ")}. Refresh the schema and try again.`,
+      );
+    }
+    const missingKeys = keyColumns.filter((column) => (keys[column] ?? "").trim() === "");
+    if (missingKeys.length > 0) {
+      throw new Error(
+        `Cannot update ${table.keyspace}.${table.table}: primary key value(s) required to identify the row — ${missingKeys.join(", ")}.`,
+      );
+    }
+    const setColumns = Object.keys(values);
+    if (setColumns.length === 0) {
+      throw new Error("No column changes to apply.");
+    }
+    const params: Array<string | null> = [];
+    const setClause = setColumns
+      .map((column) => {
+        const raw = values[column] ?? "";
+        params.push(raw === "" ? null : raw);
+        return `${quoteIdent(column)} = $${params.length}`;
+      })
+      .join(", ");
+    const whereClause = keyColumns
+      .map((column) => {
+        params.push(keys[column] ?? "");
+        return `${quoteIdent(column)} = $${params.length}`;
+      })
+      .join(" AND ");
+    const sql = `UPDATE ${quoteQualified(table.keyspace, table.table)} SET ${setClause} WHERE ${whereClause}`;
+    const result = await existing.client.query(sql, params);
+    return { updated: result.rowCount ?? 0 };
+  }
+
   async runSelectQuery(profileId: string, sql: string): Promise<QueryResultPayload> {
     const existing = this.requireConnection(profileId);
     // We don't impose a LIMIT here because pg respects the user's query as-is

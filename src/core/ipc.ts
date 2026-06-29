@@ -186,6 +186,11 @@ export interface CassandraDeskApi {
   runSelectQuery(profileId: string, cql: string, mode?: "read" | "write" | "all"): Promise<QueryResultPayload>;
   deleteTableRows(table: TableIdentity, rows: Array<Record<string, string>>): Promise<{ deleted: number }>;
   insertTableRow(table: TableIdentity, values: Record<string, string>): Promise<{ inserted: number }>;
+  updateTableRow(
+    table: TableIdentity,
+    keys: Record<string, string>,
+    values: Record<string, string>,
+  ): Promise<{ updated: number }>;
   getTableDdl(table: TableIdentity): Promise<string>;
   runSchemaScript(profileId: string, cql: string): Promise<SchemaScriptResult>;
   pickMigrationsFolder(): Promise<string | undefined>;
@@ -260,6 +265,7 @@ export const ipcChannels = {
   runSelectQuery: "query:run-select",
   deleteTableRows: "table:delete-rows",
   insertTableRow: "table:insert-row",
+  updateTableRow: "table:update-row",
   getTableDdl: "table:get-ddl",
   runSchemaScript: "schema:run-script",
   pickMigrationsFolder: "migrations:pick-folder",

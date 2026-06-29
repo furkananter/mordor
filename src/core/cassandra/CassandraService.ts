@@ -449,6 +449,62 @@ export class CassandraService {
     return { inserted: 1 };
   }
 
+  /**
+   * Update a single existing row, identified by its original primary key values
+   * (`keys`). Only non-key columns may be changed — Cassandra forbids mutating a
+   * primary key in place (that's a delete + re-insert). An empty value clears the
+   * column (coerceForCassandra maps "" -> null, which deletes the cell).
+   */
+  async updateRow(
+    table: TableIdentity,
+    keys: Record<string, string>,
+    values: Record<string, string>,
+  ): Promise<{ updated: number }> {
+    const { existing, typeByColumn, keyColumns } = await this.resolveWriteContext(table);
+    if (keyColumns.length === 0) {
+      throw new Error(
+        `Cannot update rows in ${table.keyspace}.${table.table}: no primary key columns found.`,
+      );
+    }
+    const keySet = new Set(keyColumns);
+    const illegalKeyUpdates = Object.keys(values).filter((column) => keySet.has(column));
+    if (illegalKeyUpdates.length > 0) {
+      throw new Error(
+        `Cannot update primary key column(s) — ${illegalKeyUpdates.join(", ")}. ` +
+          `Delete and re-insert the row to change its key.`,
+      );
+    }
+    const setColumns = Object.keys(values);
+    const unknownColumns = setColumns.filter((column) => !typeByColumn.has(column));
+    if (unknownColumns.length > 0) {
+      throw new Error(
+        `Cannot update ${table.keyspace}.${table.table}: unknown column(s) — ${unknownColumns.join(", ")}. Refresh the schema and try again.`,
+      );
+    }
+    const missingKeys = keyColumns.filter((column) => (keys[column] ?? "").trim() === "");
+    if (missingKeys.length > 0) {
+      throw new Error(
+        `Cannot update ${table.keyspace}.${table.table}: primary key column(s) required to identify the row — ${missingKeys.join(", ")}.`,
+      );
+    }
+    if (setColumns.length === 0) {
+      throw new Error("No column changes to apply.");
+    }
+    const setClause = setColumns.map((column) => `${quoteIdentifier(column)} = ?`).join(", ");
+    const whereClause = keyColumns.map((column) => `${quoteIdentifier(column)} = ?`).join(" AND ");
+    const cql = `UPDATE ${quoteIdentifier(table.keyspace)}.${quoteIdentifier(table.table)} SET ${setClause} WHERE ${whereClause}`;
+    const params = [
+      ...setColumns.map((column) =>
+        coerceForCassandra(values[column] ?? "", typeByColumn.get(column) ?? "text"),
+      ),
+      ...keyColumns.map((column) =>
+        coerceForCassandra(keys[column] ?? "", typeByColumn.get(column) ?? "text"),
+      ),
+    ];
+    await existing.client.execute(cql, params, { prepare: true });
+    return { updated: 1 };
+  }
+
   async runSelectQuery(
     profileId: string,
     cql: string,

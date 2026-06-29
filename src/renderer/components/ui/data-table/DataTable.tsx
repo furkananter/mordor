@@ -9,7 +9,7 @@ import {
   getSortedRowModel,
   useReactTable
 } from "@tanstack/react-table";
-import { Copy, Maximize2, Minimize2, X } from "lucide-react";
+import { Copy, Maximize2, Minimize2, Pencil, X } from "lucide-react";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 import { usePreferencesStore } from "../../../store/preferences";
 import { useLayoutStore } from "../../../store/layout";
@@ -35,6 +35,13 @@ export interface DataTableDeleteConfig {
   disabledReason?: string;
 }
 
+export interface DataTableEditConfig {
+  onEdit(row: Row): void;
+  /** When false, the Edit button renders disabled. */
+  enabled?: boolean;
+  disabledReason?: string;
+}
+
 // Memo'd because parents (DataPanel, CqlPanel) feed referentially stable props
 // — the preview result is deep-equal short-circuited on live-mode ticks,
 // columnTypes/pkColumns/deleteConfig are useMemo'd, and the page-size + flags
@@ -50,6 +57,7 @@ function DataTableImpl({
   pageSize,
   enableSelection = false,
   deleteConfig,
+  editConfig,
   rowIdColumns,
   highlightRowIds
 }: {
@@ -62,6 +70,7 @@ function DataTableImpl({
   pageSize?: number;
   enableSelection?: boolean;
   deleteConfig?: DataTableDeleteConfig;
+  editConfig?: DataTableEditConfig;
   /** Column names whose concatenation forms a stable row id (e.g. primary keys). */
   rowIdColumns?: string[];
   /** Row IDs to render with a highlight (e.g. recently arrived in live mode). */
@@ -184,6 +193,7 @@ function DataTableImpl({
           row={expandedRow}
           columns={result.columns}
           {...(columnTypes ? { columnTypes } : {})}
+          {...(editConfig ? { editConfig } : {})}
           onClose={() => setExpandedRowKey(null)}
         />
       )}
@@ -209,11 +219,13 @@ function RowDetailPanel({
   row,
   columns,
   columnTypes,
+  editConfig,
   onClose
 }: {
   row: Row;
   columns: string[];
   columnTypes?: Record<string, string> | undefined;
+  editConfig?: DataTableEditConfig;
   onClose(): void;
 }) {
   const height = useLayoutStore((state) => state.rowDetailHeight);
@@ -263,6 +275,18 @@ function RowDetailPanel({
       <div className="flex items-center justify-between border-b border-line-soft px-3 py-1.5">
         <span className="text-[11px] font-medium text-muted">Row data</span>
         <div className="flex items-center gap-0.5">
+          {editConfig ? (
+            <button
+              type="button"
+              onClick={() => editConfig.onEdit(row)}
+              disabled={editConfig.enabled === false}
+              className="rounded p-0.5 text-subtle hover:bg-line-soft hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label="Edit row"
+              title={editConfig.enabled === false ? editConfig.disabledReason ?? "Editing unavailable" : "Edit row"}
+            >
+              <Pencil size={12} strokeWidth={1.7} />
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={toggleMaximize}
