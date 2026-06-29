@@ -407,6 +407,57 @@ export class PostgresService {
     return { updated: result.rowCount };
   }
 
+  /**
+   * Delete one or more rows identified by their primary-key values. Each row in
+   * `rows` must supply every primary-key column — non-key columns are ignored.
+   * All deletes run inside a single transaction so the selection is removed
+   * atomically: if any statement fails we ROLLBACK and nothing is deleted.
+   * Mirrors the Cassandra `deleteRows` contract (reject empty/whitespace key
+   * values; throw when the table has no primary key).
+   */
+  async deleteRows(
+    table: TableIdentity,
+    rows: Array<Record<string, string>>,
+  ): Promise<{ deleted: number }> {
+    if (rows.length === 0) return { deleted: 0 };
+    const existing = this.requireConnection(table.profileId);
+    const schema = await this.fetchTableSchema(table);
+    const keyColumns = schema.partitionKeys;
+    if (keyColumns.length === 0) {
+      throw new Error(
+        `Cannot delete rows from ${table.keyspace}.${table.table}: no primary key found to identify the row.`,
+      );
+    }
+    const missing = rows
+      .map((row, index) => ({ index, row }))
+      .filter(({ row }) => keyColumns.some((column) => (row[column] ?? "").trim() === ""));
+    if (missing.length > 0) {
+      throw new Error(
+        `Selected rows are missing primary key columns required for deletion (rows: ${missing
+          .map(({ index }) => index + 1)
+          .join(", ")}).`,
+      );
+    }
+    const whereClause = keyColumns
+      .map((column, index) => `${quoteIdent(column)} = $${index + 1}`)
+      .join(" AND ");
+    const sql = `DELETE FROM ${quoteQualified(table.keyspace, table.table)} WHERE ${whereClause}`;
+    let deleted = 0;
+    await existing.client.query("BEGIN");
+    try {
+      for (const row of rows) {
+        const params = keyColumns.map((column) => row[column] ?? "");
+        const result = await existing.client.query(sql, params);
+        deleted += result.rowCount ?? 0;
+      }
+      await existing.client.query("COMMIT");
+    } catch (error) {
+      await existing.client.query("ROLLBACK");
+      throw error;
+    }
+    return { deleted };
+  }
+
   async runSelectQuery(profileId: string, sql: string): Promise<QueryResultPayload> {
     const existing = this.requireConnection(profileId);
     // We don't impose a LIMIT here because pg respects the user's query as-is

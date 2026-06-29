@@ -131,4 +131,48 @@ describe("IPC handler map", () => {
     ).resolves.toEqual({ updated: 1 });
     expect(postgres.updateRow).toHaveBeenCalledWith(table, keys, values);
   });
+
+  it("deletes rows through the service matching the profile type", async () => {
+    const table = { profileId: "p1", profileName: "Local", keyspace: "app", table: "orders" };
+    const rows = [{ id: "abc" }, { id: "def" }];
+
+    // Cassandra profile routes to cassandra.deleteRows.
+    const cassandra = {
+      deleteRows: vi.fn().mockResolvedValue({ deleted: 2 })
+    } as unknown as CassandraService;
+    const cassandraStore = {
+      get: vi.fn().mockResolvedValue(profile)
+    } as unknown as ProfileStore;
+    const cassandraCtx = buildContext({ cassandra, store: cassandraStore });
+
+    const cassandraHandlers = createIpcHandlerMap(cassandraCtx);
+    await expect(
+      cassandraHandlers[ipcChannels.deleteTableRows](table, rows)
+    ).resolves.toEqual({ deleted: 2 });
+    expect(cassandra.deleteRows).toHaveBeenCalledWith(table, rows);
+
+    // Postgres profile routes to postgres.deleteRows.
+    const postgresProfile = {
+      id: "p1",
+      name: "Local",
+      type: "postgres" as const,
+      host: "127.0.0.1",
+      port: 5432,
+      database: "app",
+      useTls: false
+    };
+    const postgres = {
+      deleteRows: vi.fn().mockResolvedValue({ deleted: 2 })
+    } as unknown as PostgresService;
+    const postgresStore = {
+      get: vi.fn().mockResolvedValue(postgresProfile)
+    } as unknown as ProfileStore;
+    const postgresCtx = buildContext({ postgres, store: postgresStore });
+
+    const postgresHandlers = createIpcHandlerMap(postgresCtx);
+    await expect(
+      postgresHandlers[ipcChannels.deleteTableRows](table, rows)
+    ).resolves.toEqual({ deleted: 2 });
+    expect(postgres.deleteRows).toHaveBeenCalledWith(table, rows);
+  });
 });
