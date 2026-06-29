@@ -180,9 +180,12 @@ export function DataPanel({
     return {
       onEdit: (row) => setEditRow(row),
       enabled: canWrite && hasPk,
-      disabledReason: !canWrite
-        ? "Enable Write or All mode in Settings to edit rows"
-        : "This table has no primary key, so a row can't be identified for editing"
+      // Check the primary-key blocker first: a table with no PK stays
+      // un-editable even in Write mode, so leading with the write-mode hint
+      // would wrongly imply switching modes unlocks it.
+      disabledReason: !hasPk
+        ? "This table has no primary key, so a row can't be identified for editing"
+        : "Enable Write or All mode in Settings to edit rows"
     };
   }, [schema, canWrite, pkColumns]);
 

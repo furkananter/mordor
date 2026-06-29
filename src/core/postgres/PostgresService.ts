@@ -396,7 +396,15 @@ export class PostgresService {
       .join(" AND ");
     const sql = `UPDATE ${quoteQualified(table.keyspace, table.table)} SET ${setClause} WHERE ${whereClause}`;
     const result = await existing.client.query(sql, params);
-    return { updated: result.rowCount ?? 0 };
+    // rowCount === 0 means the WHERE matched nothing — the row was deleted or
+    // its key changed since the edit form was opened. Without this guard the
+    // renderer would report a successful save for an UPDATE that did nothing.
+    if (!result.rowCount) {
+      throw new Error(
+        `No matching row found in ${table.keyspace}.${table.table} — it may have been deleted or its key changed since you opened the editor. Refresh and try again.`,
+      );
+    }
+    return { updated: result.rowCount };
   }
 
   async runSelectQuery(profileId: string, sql: string): Promise<QueryResultPayload> {
