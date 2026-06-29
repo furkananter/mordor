@@ -69,6 +69,7 @@ export function TableWorkspace() {
             onChange={setQueryText}
             onRun={runQuery}
             placeholder={defaultQueryForTable(selectedTable)}
+            profileId={selectedTable.profileId}
           />
         </TabPanel>
       </section>

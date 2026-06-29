@@ -126,6 +126,7 @@ export function PostgresWorkspace({
             dialect="postgres"
             placeholder={`-- Run SQL against ${profile.name} (${profile.database})\nSELECT table_schema, table_name FROM information_schema.tables ORDER BY table_schema, table_name LIMIT 100;`}
             history={history}
+            profileId={profile.id}
             onExplain={handleExplain}
             explainResult={explainText}
             explaining={explaining}
