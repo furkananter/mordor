@@ -1,0 +1,66 @@
+# Docker Compose stack for end-to-end testing.
+#
+# Brings up the three databases Mordor speaks to (Cassandra, PostgreSQL, Redis)
+# on their default ports so the Electron app can connect to real engines instead
+# of mocks. This file is OPT-IN: nothing in the normal dev/build/test flow starts
+# it. It is consumed only by the (proposed) e2e harness — see
+# `docs/specs/e2e-test-harness.md` and `test/e2e/README.md`.
+#
+# Usage (manual, until the harness lands):
+#   docker compose -f docker-compose.e2e.yml up -d
+#   # ...run the e2e suite against localhost:9042 / 5432 / 6379...
+#   docker compose -f docker-compose.e2e.yml down -v
+#
+# Ports match the app's auto-detect defaults (parsePort fallbacks in
+# `src/core/config/profile.ts`: 9042 cassandra, 5432 postgres, 6379 redis) so a
+# freshly discovered local profile points straight at these containers.
+
+services:
+  cassandra:
+    image: cassandra:5.0
+    container_name: mordor-e2e-cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      # Single-node test cluster — disable the gossip/seed handshake overhead.
+      CASSANDRA_CLUSTER_NAME: mordor-e2e
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_ENDPOINT_SNITCH: SimpleSnitch
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    healthcheck:
+      # `cqlsh -e 'describe keyspaces'` returns non-zero until CQL is accepting
+      # connections, which is the readiness signal the seed step waits on.
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: mordor-e2e-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: mordor
+      POSTGRES_PASSWORD: mordor
+      POSTGRES_DB: mordor_e2e
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mordor -d mordor_e2e"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: mordor-e2e-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
