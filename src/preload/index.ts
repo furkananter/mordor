@@ -26,6 +26,8 @@ const api: CassandraDeskApi = {
     ipcRenderer.invoke(ipcChannels.deleteTableRows, table, rows),
   insertTableRow: (table, values) =>
     ipcRenderer.invoke(ipcChannels.insertTableRow, table, values),
+  updateTableRow: (table, keys, values) =>
+    ipcRenderer.invoke(ipcChannels.updateTableRow, table, keys, values),
   getTableDdl: (table) => ipcRenderer.invoke(ipcChannels.getTableDdl, table),
   runSchemaScript: (profileId, cql) =>
     ipcRenderer.invoke(ipcChannels.runSchemaScript, profileId, cql),

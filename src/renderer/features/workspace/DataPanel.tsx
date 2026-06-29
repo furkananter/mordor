@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronsDown, Plus, Radio } from "lucide-react";
 import { PreviewRowsPayload, TableSchemaPayload } from "../../../core/shared/messages";
 import { Button } from "../../components/ui/Button";
-import { DataTable, DataTableDeleteConfig } from "../../components/ui/data-table/DataTable";
-import { computeRowId } from "../../components/ui/data-table/types";
+import { DataTable, DataTableDeleteConfig, DataTableEditConfig } from "../../components/ui/data-table/DataTable";
+import { computeRowId, Row } from "../../components/ui/data-table/types";
 import { PanelHeader } from "../../components/ui/PanelHeader";
 import { InsertRowDialog } from "./InsertRowDialog";
+import { EditRowDialog } from "./EditRowDialog";
 import { useLivePolling } from "../../hooks/useLivePolling";
 import { LIVE_INTERVAL_OPTIONS_MS, LiveIntervalMs } from "../../store/constants";
 import { usePreferencesStore } from "../../store/preferences";
@@ -35,6 +36,7 @@ export function DataPanel({
   const setError = useStatusStore((state) => state.setError);
   const [liveEnabled, setLiveEnabled] = useState(false);
   const [insertOpen, setInsertOpen] = useState(false);
+  const [editRow, setEditRow] = useState<Row | undefined>(undefined);
   const canWrite = queryMode !== "read";
 
   const tableKey = schema
@@ -169,6 +171,24 @@ export function DataPanel({
     };
   }, [schema, reloadSelectedTable, setError]);
 
+  // Memoize the edit config for the same stable-reference reason as deleteConfig
+  // — DataTable memo-compares its props, and an inline object would defeat it on
+  // every live-mode tick.
+  const editConfig: DataTableEditConfig | undefined = useMemo(() => {
+    if (!schema) return undefined;
+    const hasPk = pkColumns.length > 0;
+    return {
+      onEdit: (row) => setEditRow(row),
+      enabled: canWrite && hasPk,
+      // Check the primary-key blocker first: a table with no PK stays
+      // un-editable even in Write mode, so leading with the write-mode hint
+      // would wrongly imply switching modes unlocks it.
+      disabledReason: !hasPk
+        ? "This table has no primary key, so a row can't be identified for editing"
+        : "Enable Write or All mode in Settings to edit rows"
+    };
+  }, [schema, canWrite, pkColumns]);
+
   const hasMore = Boolean(preview?.pageState);
   const meta = preview ? `${preview.rows.length}${hasMore ? "+" : ""} rows` : "auto pageSize 1000";
 
@@ -256,6 +276,7 @@ export function DataPanel({
         rowIdColumns={pkColumns}
         {...(liveEnabled && freshIds.size > 0 ? { highlightRowIds: freshIds } : {})}
         {...(deleteConfig ? { deleteConfig } : {})}
+        {...(editConfig ? { editConfig } : {})}
       />
       {schema ? (
         <InsertRowDialog
@@ -263,6 +284,20 @@ export function DataPanel({
           schema={schema}
           onOpenChange={setInsertOpen}
           onInserted={() => void reloadSelectedTable()}
+        />
+      ) : null}
+      {schema && editRow ? (
+        <EditRowDialog
+          open={Boolean(editRow)}
+          schema={schema}
+          row={editRow}
+          onOpenChange={(open) => {
+            if (!open) setEditRow(undefined);
+          }}
+          onUpdated={() => {
+            setEditRow(undefined);
+            void reloadSelectedTable();
+          }}
         />
       ) : null}
     </section>
