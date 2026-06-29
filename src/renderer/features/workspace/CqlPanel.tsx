@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { Bookmark, History, Play, Trash2, Zap } from "lucide-react";
 import { QueryResultPayload, TableSchemaPayload } from "../../../core/shared/messages";
 import { Button } from "../../components/ui/Button";
@@ -17,6 +17,7 @@ import { DataTable } from "../../components/ui/data-table/DataTable";
 import { useLayoutStore } from "../../store/layout";
 import { usePreferencesStore } from "../../store/preferences";
 import { useQueryHistoryStore } from "../../store/queryHistory";
+import { useQueryStore } from "../../store/query";
 
 export function CqlPanel({
   queryText,
@@ -97,12 +98,6 @@ export function CqlPanel({
   }, [schema]);
 
   const recordRun = useQueryHistoryStore((state) => state.recordRun);
-  // `onRun` resolves before the parent re-renders with the fresh result, so we
-  // read the just-loaded payload off a ref rather than the (stale) prop.
-  const queryResultRef = useRef(queryResult);
-  useEffect(() => {
-    queryResultRef.current = queryResult;
-  }, [queryResult]);
 
   const handleRun = async () => {
     if (!profileId) {
@@ -118,7 +113,12 @@ export function CqlPanel({
       throw caught;
     } finally {
       if (sql) {
-        const rowCount = ok ? queryResultRef.current?.rows.length : undefined;
+        // `onRun` resolves before the parent re-renders with the fresh result,
+        // so the `queryResult` prop is still stale here. Read the just-loaded
+        // payload straight from the store, which `runQuery` sets synchronously.
+        const rowCount = ok
+          ? useQueryStore.getState().queryResult?.rows.length
+          : undefined;
         recordRun({
           profileId,
           sql,
