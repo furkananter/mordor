@@ -1,3 +1,4 @@
+import { checkServerIdentity } from "node:tls";
 import type * as cassandra from "cassandra-driver";
 import {
   ColumnMetadata,
@@ -28,6 +29,7 @@ function driverSync(): typeof cassandra {
   return driverCache;
 }
 import { ConnectionProfileWithPassword } from "../config/profile";
+import type { SshTunnelManager } from "../db/sshTunnel";
 import { buildTablePreviewQuery, previewLimit, quoteIdentifier } from "./cql";
 import { splitCqlStatements } from "./cqlSplit";
 import { isSchemaChange, waitForSchemaAgreement } from "./migrations/MigrationExecutor";
@@ -93,6 +95,11 @@ const systemKeyspaces = new Set([
 export class CassandraService {
   private readonly connections = new Map<string, ActiveConnection>();
 
+  // Optional SSH tunnel manager. When a profile carries `ssh`, connect opens a
+  // local-forwarded port through the bastion first and points the driver's
+  // contact points at it; disconnect tears the tunnel down.
+  constructor(private readonly sshTunnel?: SshTunnelManager) {}
+
   isConnected(profileId: string): boolean {
     return this.connections.has(profileId);
   }
@@ -116,11 +123,32 @@ export class CassandraService {
       return existing.schema;
     }
 
+    // When SSH is configured, forward the first contact point through the
+    // bastion and aim the driver at the local endpoint. We tunnel a single
+    // contact point (the driver discovers peers via that node's system tables;
+    // those peer addresses are cluster-internal and out of scope for v1 SSH).
+    let contactPoints = profile.contactPoints;
+    let port = profile.port;
+    let tunnelServername: string | undefined;
+    if (profile.ssh && this.sshTunnel) {
+      const firstPoint = profile.contactPoints[0];
+      if (!firstPoint) throw new Error("Cassandra profile has no contact points to tunnel.");
+      const endpoint = await this.sshTunnel.open(profile.id, profile.ssh, {
+        host: firstPoint,
+        port: profile.port,
+      });
+      contactPoints = [endpoint.host];
+      port = endpoint.port;
+      // We now dial 127.0.0.1, but the node's certificate is issued for the
+      // real contact point — remember it so TLS verifies against the real host.
+      tunnelServername = firstPoint;
+    }
+
     const clientOptions: cassandra.ClientOptions = {
-      contactPoints: profile.contactPoints,
+      contactPoints,
       localDataCenter: profile.localDataCenter,
       protocolOptions: {
-        port: profile.port,
+        port,
       },
     };
 
@@ -138,15 +166,32 @@ export class CassandraService {
     }
 
     if (profile.useTls) {
-      clientOptions.sslOptions = {};
+      const sslOptions: cassandra.ClientOptions["sslOptions"] = {};
+      if (tunnelServername) {
+        // SNI for the handshake, plus pin the certificate identity check to the
+        // real contact point: the socket connects to 127.0.0.1 so the driver's
+        // default checkServerIdentity would verify the cert against "127.0.0.1"
+        // and reject a cert issued for the real host. Verify against the real
+        // contact point instead.
+        sslOptions.servername = tunnelServername;
+        sslOptions.checkServerIdentity = (_host, cert) =>
+          checkServerIdentity(tunnelServername!, cert);
+      }
+      clientOptions.sslOptions = sslOptions;
     }
 
     const client = new driver.Client(clientOptions);
 
-    await client.connect();
-    const schema = await this.fetchSchema(client);
-    this.connections.set(profile.id, { profile, client, schema });
-    return schema;
+    try {
+      await client.connect();
+      const schema = await this.fetchSchema(client);
+      this.connections.set(profile.id, { profile, client, schema });
+      return schema;
+    } catch (caught) {
+      // Connect failed past the tunnel — don't leak the bastion connection.
+      if (profile.ssh && this.sshTunnel) await this.sshTunnel.close(profile.id);
+      throw caught;
+    }
   }
 
   async disconnect(profileId: string): Promise<void> {
@@ -157,6 +202,9 @@ export class CassandraService {
 
     this.connections.delete(profileId);
     await existing.client.shutdown();
+    if (existing.profile.ssh && this.sshTunnel) {
+      await this.sshTunnel.close(profileId);
+    }
   }
 
   async refreshSchema(profileId: string): Promise<KeyspaceNode[]> {

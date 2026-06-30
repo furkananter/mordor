@@ -5,7 +5,8 @@ import {
   ConnectionDraft,
   PostgresConnectionDraft,
   ProfileType,
-  RedisConnectionDraft
+  RedisConnectionDraft,
+  SshConnectionDraft
 } from "../../../core/config/profile";
 import { ProfileListItem } from "../../../core/ipc";
 import { Button } from "../../components/ui/Button";
@@ -47,6 +48,33 @@ const postgresDefault: PostgresConnectionDraft = {
   connectionString: ""
 };
 
+const sshDraftDefault: SshConnectionDraft = {
+  enabled: false,
+  host: "",
+  port: "22",
+  username: "",
+  authKind: "password",
+  password: "",
+  privateKeyPath: "",
+  passphrase: ""
+};
+
+function sshDraftFromProfile(ssh: ProfileListItem["ssh"]): SshConnectionDraft {
+  if (!ssh) return sshDraftDefault;
+  const draft: SshConnectionDraft = {
+    enabled: true,
+    host: ssh.host,
+    port: String(ssh.port),
+    username: ssh.username,
+    authKind: ssh.auth.kind,
+    // Secrets are never sent to the renderer — leave blank ("keep" on edit).
+    password: "",
+    passphrase: ""
+  };
+  if (ssh.auth.privateKeyPath) draft.privateKeyPath = ssh.auth.privateKeyPath;
+  return draft;
+}
+
 function defaultForType(type: ProfileType): ConnectionDraft {
   switch (type) {
     case "cassandra":
@@ -68,7 +96,8 @@ function draftFromProfile(profile: ProfileListItem): ConnectionDraft {
       db: String(profile.db),
       username: profile.username ?? "",
       password: "",
-      useTls: profile.useTls
+      useTls: profile.useTls,
+      ssh: sshDraftFromProfile(profile.ssh)
     };
   }
   if (profile.type === "postgres") {
@@ -81,7 +110,8 @@ function draftFromProfile(profile: ProfileListItem): ConnectionDraft {
       username: profile.username ?? "",
       password: "",
       useTls: profile.useTls,
-      connectionString: ""
+      connectionString: "",
+      ssh: sshDraftFromProfile(profile.ssh)
     };
     if (profile.sslMode) draft.sslMode = profile.sslMode;
     return draft;
@@ -97,7 +127,8 @@ function draftFromProfile(profile: ProfileListItem): ConnectionDraft {
     password: "",
     useTls: profile.useTls,
     migrationsFolder: profile.migrationsFolder ?? "",
-    migrationsKeyspace: profile.migrationsKeyspace ?? ""
+    migrationsKeyspace: profile.migrationsKeyspace ?? "",
+    ssh: sshDraftFromProfile(profile.ssh)
   };
 }
 
@@ -221,6 +252,7 @@ function CassandraFields({
         <input className={inputClassName} value={draft.keyspace ?? ""} onChange={(event) => update("keyspace", event.target.value)} />
       </label>
       <UserPasswordTls draft={draft} editing={editing} onChange={(updates) => setDraft({ ...draft, ...updates } as ConnectionDraft)} />
+      <SshFields ssh={draft.ssh} editing={editing} onChange={(ssh) => update("ssh", ssh)} />
 
       <div className="mt-2 border-t border-line-soft pt-3">
         <h3 className="text-[11.5px] font-medium text-text">Migrations <span className="font-normal text-subtle">· optional</span></h3>
@@ -280,6 +312,7 @@ function RedisFields({
         </label>
       </div>
       <UserPasswordTls draft={draft} editing={editing} onChange={(updates) => setDraft({ ...draft, ...updates } as ConnectionDraft)} />
+      <SshFields ssh={draft.ssh} editing={editing} onChange={(ssh) => update("ssh", ssh)} />
     </>
   );
 }
@@ -344,7 +377,84 @@ function PostgresFields({
           <option value="verify-full">verify-full</option>
         </select>
       </label>
+      <SshFields ssh={draft.ssh} editing={editing} onChange={(ssh) => update("ssh", ssh)} />
     </>
+  );
+}
+
+function SshFields({
+  ssh,
+  editing,
+  onChange
+}: {
+  ssh: SshConnectionDraft | undefined;
+  editing: boolean;
+  onChange(next: SshConnectionDraft): void;
+}) {
+  const value = ssh ?? sshDraftDefault;
+  const update = <K extends keyof SshConnectionDraft>(key: K, next: SshConnectionDraft[K]) =>
+    onChange({ ...value, [key]: next });
+
+  return (
+    <div className="mt-2 border-t border-line-soft pt-3">
+      <label className="flex items-center gap-2 text-[12px] text-muted">
+        <input
+          className="h-3.5 w-3.5 accent-accent"
+          checked={value.enabled}
+          onChange={(event) => update("enabled", event.target.checked)}
+          type="checkbox"
+        />
+        <span className="text-[11.5px] font-medium text-text">
+          SSH tunnel <span className="font-normal text-subtle">· optional, connect through a bastion</span>
+        </span>
+      </label>
+      {value.enabled ? (
+        <div className="mt-2 grid gap-2">
+          <div className="grid grid-cols-[1fr_88px] gap-2">
+            <label className={labelClassName}>
+              SSH host
+              <input className={inputClassName} value={value.host} onChange={(event) => update("host", event.target.value)} placeholder="bastion.example.com" />
+            </label>
+            <label className={labelClassName}>
+              Port
+              <input className={inputClassName} value={value.port ?? ""} onChange={(event) => update("port", event.target.value)} placeholder="22" />
+            </label>
+          </div>
+          <label className={labelClassName}>
+            SSH user
+            <input className={inputClassName} value={value.username} onChange={(event) => update("username", event.target.value)} placeholder="deploy" />
+          </label>
+          <label className={labelClassName}>
+            Auth method
+            <select
+              className={inputClassName}
+              value={value.authKind}
+              onChange={(event) => update("authKind", event.target.value === "key" ? "key" : "password")}
+            >
+              <option value="password">Password</option>
+              <option value="key">Private key</option>
+            </select>
+          </label>
+          {value.authKind === "key" ? (
+            <>
+              <label className={labelClassName}>
+                Private key path
+                <input className={inputClassName} value={value.privateKeyPath ?? ""} onChange={(event) => update("privateKeyPath", event.target.value)} placeholder="~/.ssh/id_ed25519" />
+              </label>
+              <label className={labelClassName}>
+                Passphrase{editing ? <span className="text-subtle font-normal"> · keep</span> : null}
+                <input className={inputClassName} value={value.passphrase ?? ""} onChange={(event) => update("passphrase", event.target.value)} type="password" />
+              </label>
+            </>
+          ) : (
+            <label className={labelClassName}>
+              SSH password{editing ? <span className="text-subtle font-normal"> · keep</span> : null}
+              <input className={inputClassName} value={value.password ?? ""} onChange={(event) => update("password", event.target.value)} type="password" />
+            </label>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

@@ -5,6 +5,7 @@ import { CassandraAdapter } from "../adapters/CassandraAdapter";
 import { PostgresAdapter } from "../adapters/PostgresAdapter";
 import { RedisAdapter } from "../adapters/RedisAdapter";
 import { ProfileStore } from "../ProfileStore";
+import { SshTunnel } from "../ssh/SshTunnel";
 import { createExportHandlers } from "./export-handlers";
 import { createMigrationHandlers } from "./migrationHandlers";
 import { createProfileHandlers } from "./profileHandlers";
@@ -20,9 +21,12 @@ export interface MainContext {
 }
 
 export function createMainContext(store: ProfileStore): MainContext {
-  const cassandra = new CassandraService();
-  const postgres = new PostgresService();
-  const redis = new RedisAdapter();
+  // One shared tunnel manager across all engines — keyed by profileId so each
+  // engine's connect/disconnect opens/closes the right bastion forward.
+  const sshTunnel = new SshTunnel();
+  const cassandra = new CassandraService(sshTunnel);
+  const postgres = new PostgresService(sshTunnel);
+  const redis = new RedisAdapter(sshTunnel);
   const adapters = new AdapterRegistry();
   adapters.register(new CassandraAdapter(cassandra));
   adapters.register(new PostgresAdapter(postgres));

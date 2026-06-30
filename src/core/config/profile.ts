@@ -10,12 +10,38 @@ function newProfileId(): string {
 
 export type ProfileType = "cassandra" | "redis" | "postgres";
 
+export type SshAuthKind = "password" | "key";
+
+/**
+ * Optional per-profile SSH tunnel. When present, the DB client connects to a
+ * local forwarded port instead of the real host (see `SshTunnel`). The bastion
+ * `password`/`passphrase` are SECRETS — they are stripped before the profile is
+ * written to plaintext JSON and stored via the keychain (`SecretStore`), exactly
+ * like the DB `password`. The persisted profile keeps only the non-secret shape
+ * (host/port/username/auth.kind/privateKeyPath).
+ */
+export interface SshConfig {
+  host: string;
+  port: number;
+  username: string;
+  auth: {
+    kind: SshAuthKind;
+    /** Secret — never persisted in plaintext profile JSON. */
+    password?: string;
+    /** Path to a private key file on disk (non-secret). */
+    privateKeyPath?: string;
+    /** Secret — never persisted in plaintext profile JSON. */
+    passphrase?: string;
+  };
+}
+
 interface BaseProfile {
   id: string;
   name: string;
   type: ProfileType;
   useTls: boolean;
   username?: string;
+  ssh?: SshConfig;
 }
 
 export interface CassandraProfile extends BaseProfile {
@@ -53,6 +79,23 @@ export interface PostgresProfile extends BaseProfile {
 
 export type ConnectionProfile = CassandraProfile | RedisProfile | PostgresProfile;
 
+/**
+ * String-valued draft for the optional SSH tunnel section of the connection
+ * form. `enabled` lets the user toggle the whole section without losing the
+ * typed values. Mirrors the other drafts (everything is a string the form
+ * binds to; `createProfileFromDraft` parses/validates).
+ */
+export interface SshConnectionDraft {
+  enabled: boolean;
+  host: string;
+  port?: string;
+  username: string;
+  authKind: SshAuthKind;
+  password?: string;
+  privateKeyPath?: string;
+  passphrase?: string;
+}
+
 export interface CassandraConnectionDraft {
   type: "cassandra";
   name: string;
@@ -65,6 +108,7 @@ export interface CassandraConnectionDraft {
   useTls: boolean;
   migrationsFolder?: string;
   migrationsKeyspace?: string;
+  ssh?: SshConnectionDraft;
 }
 
 export interface RedisConnectionDraft {
@@ -76,6 +120,7 @@ export interface RedisConnectionDraft {
   username?: string;
   password?: string;
   useTls: boolean;
+  ssh?: SshConnectionDraft;
 }
 
 export interface PostgresConnectionDraft {
@@ -90,6 +135,7 @@ export interface PostgresConnectionDraft {
   sslMode?: PostgresProfile["sslMode"];
   /** Pasted `postgres://...` URI. When present, overrides other fields on save. */
   connectionString?: string;
+  ssh?: SshConnectionDraft;
 }
 
 export type ConnectionDraft =
@@ -155,6 +201,8 @@ function validateCassandraStored(candidate: Record<string, unknown>): CassandraP
   if (keyspace) profile.keyspace = keyspace;
   const username = normalizeOptional(candidate["username"]);
   if (username) profile.username = username;
+  const ssh = validateStoredSsh(candidate["ssh"]);
+  if (ssh) profile.ssh = ssh;
   const migrationsFolder = normalizeOptional(candidate["migrationsFolder"]);
   if (migrationsFolder) profile.migrationsFolder = migrationsFolder;
   const migrationsKeyspace = normalizeOptional(candidate["migrationsKeyspace"]);
@@ -181,6 +229,8 @@ function validateRedisStored(candidate: Record<string, unknown>): RedisProfile |
   if (typeof candidate["tlsRejectUnauthorized"] === "boolean") {
     profile.tlsRejectUnauthorized = candidate["tlsRejectUnauthorized"] as boolean;
   }
+  const ssh = validateStoredSsh(candidate["ssh"]);
+  if (ssh) profile.ssh = ssh;
   return profile;
 }
 
@@ -205,7 +255,41 @@ function validatePostgresStored(candidate: Record<string, unknown>): PostgresPro
   if (sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full") {
     profile.sslMode = sslMode;
   }
+  const ssh = validateStoredSsh(candidate["ssh"]);
+  if (ssh) profile.ssh = ssh;
   return profile;
+}
+
+/**
+ * Validate an stored `ssh` blob back into a `SshConfig`. Secrets
+ * (`password`/`passphrase`) are NOT persisted in the profile JSON — they live in
+ * the keychain — so this never reads them; the connect path re-attaches them
+ * from the `SecretStore`. Returns `undefined` (not an error) when ssh is absent
+ * or malformed, keeping old profiles back-compatible (absent ssh = direct
+ * connect).
+ */
+export function validateStoredSsh(value: unknown): SshConfig | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  const host = normalizeOptional(candidate["host"]);
+  if (!host) return undefined;
+  if (typeof candidate["port"] !== "number") return undefined;
+  const username = normalizeOptional(candidate["username"]);
+  if (!username) return undefined;
+  const auth = candidate["auth"];
+  if (!auth || typeof auth !== "object") return undefined;
+  const authCandidate = auth as Record<string, unknown>;
+  const kind: SshAuthKind = authCandidate["kind"] === "key" ? "key" : "password";
+
+  const ssh: SshConfig = {
+    host,
+    port: normalizePort(candidate["port"] as number),
+    username,
+    auth: { kind },
+  };
+  const privateKeyPath = normalizeOptional(authCandidate["privateKeyPath"]);
+  if (privateKeyPath) ssh.auth.privateKeyPath = privateKeyPath;
+  return ssh;
 }
 
 export function createProfileFromDraft(draft: ConnectionDraft): ConnectionProfileWithPassword {
@@ -228,6 +312,8 @@ export function createProfileFromDraft(draft: ConnectionDraft): ConnectionProfil
     if (username) profile.username = username;
     const password = normalizeOptional(draft.password);
     if (password) profile.password = password;
+    const ssh = buildSshConfigFromDraft(draft.ssh);
+    if (ssh) profile.ssh = ssh;
     return profile;
   }
 
@@ -266,6 +352,8 @@ export function createProfileFromDraft(draft: ConnectionDraft): ConnectionProfil
     if (sslMode === "require" || sslMode === "verify-ca" || sslMode === "verify-full") {
       profile.sslMode = sslMode;
     }
+    const ssh = buildSshConfigFromDraft(draft.ssh);
+    if (ssh) profile.ssh = ssh;
     return profile;
   }
 
@@ -291,7 +379,43 @@ export function createProfileFromDraft(draft: ConnectionDraft): ConnectionProfil
   if (migrationsFolder) profile.migrationsFolder = migrationsFolder;
   const migrationsKeyspace = normalizeOptional(draft.migrationsKeyspace);
   if (migrationsKeyspace) profile.migrationsKeyspace = migrationsKeyspace;
+  const ssh = buildSshConfigFromDraft(draft.ssh);
+  if (ssh) profile.ssh = ssh;
   return profile;
+}
+
+/**
+ * Turn the string-valued SSH draft into a validated `SshConfig`. Returns
+ * `undefined` when the section is disabled or absent (→ direct connect, the
+ * back-compatible default). The returned config CAN carry the
+ * `password`/`passphrase` secrets — callers persisting the profile must strip
+ * them into the `SecretStore` (see `ProfileStore`).
+ */
+export function buildSshConfigFromDraft(draft: SshConnectionDraft | undefined): SshConfig | undefined {
+  if (!draft || !draft.enabled) return undefined;
+  const host = draft.host.trim();
+  if (!host) throw new Error("SSH host is required when the tunnel is enabled.");
+  const username = draft.username.trim();
+  if (!username) throw new Error("SSH username is required when the tunnel is enabled.");
+  const kind: SshAuthKind = draft.authKind === "key" ? "key" : "password";
+
+  const ssh: SshConfig = {
+    host,
+    port: parsePort(draft.port, 22),
+    username,
+    auth: { kind },
+  };
+  if (kind === "key") {
+    const privateKeyPath = normalizeOptional(draft.privateKeyPath);
+    if (!privateKeyPath) throw new Error("A private key path is required for SSH key auth.");
+    ssh.auth.privateKeyPath = privateKeyPath;
+    const passphrase = normalizeOptional(draft.passphrase);
+    if (passphrase) ssh.auth.passphrase = passphrase;
+  } else {
+    const password = normalizeOptional(draft.password);
+    if (password) ssh.auth.password = password;
+  }
+  return ssh;
 }
 
 interface ParsedPostgresUri {
@@ -339,6 +463,14 @@ function parsePostgresConnectionString(input: string): ParsedPostgresUri | undef
 
 export function secretKeyForProfile(profileId: string): string {
   return `connection:${profileId}:password`;
+}
+
+export function secretKeyForSshPassword(profileId: string): string {
+  return `connection:${profileId}:ssh-password`;
+}
+
+export function secretKeyForSshPassphrase(profileId: string): string {
+  return `connection:${profileId}:ssh-passphrase`;
 }
 
 export function profileAddress(profile: ConnectionProfile): string {
