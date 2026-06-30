@@ -30,6 +30,42 @@ export interface PreviewRowsPayload {
   pageState?: string;
 }
 
+export type PreviewFilterOp =
+  | "eq"
+  | "neq"
+  | "contains"
+  | "gt"
+  | "lt"
+  | "gte"
+  | "lte";
+
+export interface PreviewFilter {
+  column: string;
+  op: PreviewFilterOp;
+  /** Compared value. Optional so an op like a future "is null" needs no value. */
+  value?: string;
+}
+
+export interface PreviewSort {
+  column: string;
+  dir: "asc" | "desc";
+}
+
+/**
+ * Optional server-side query refinement for {@link PreviewRowsPayload} fetches.
+ * Entirely additive — when absent the engines fall back to their existing
+ * unfiltered preview behaviour (Cassandra `pageState`, Postgres `LIMIT/OFFSET`).
+ *
+ * `cursor` carries keyset-pagination state for the Postgres path: an opaque,
+ * base64-encoded snapshot of the last row's sort-key values, used to build a
+ * `WHERE (sortcols) > cursor` continuation instead of an O(n) `OFFSET`.
+ */
+export interface PreviewQuery {
+  filters?: PreviewFilter[];
+  sort?: PreviewSort[];
+  cursor?: string;
+}
+
 export interface QueryResultPayload extends PreviewRowsPayload {
   cql: string;
 }

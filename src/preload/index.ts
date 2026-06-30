@@ -18,8 +18,8 @@ const api: CassandraDeskApi = {
     ipcRenderer.invoke(ipcChannels.refreshSchema, profileId),
   getTableSchema: (table) =>
     ipcRenderer.invoke(ipcChannels.getTableSchema, table),
-  getPreview: (table, pageState) =>
-    ipcRenderer.invoke(ipcChannels.getPreview, table, pageState),
+  getPreview: (table, pageState, query) =>
+    ipcRenderer.invoke(ipcChannels.getPreview, table, pageState, query),
   runSelectQuery: (profileId, cql, mode) =>
     ipcRenderer.invoke(ipcChannels.runSelectQuery, profileId, cql, mode),
   deleteTableRows: (table, rows) =>

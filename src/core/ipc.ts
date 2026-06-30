@@ -9,6 +9,7 @@ import {
   MigrationApplyResult,
   MigrationListPayload,
   MigrationPreview,
+  PreviewQuery,
   PreviewRowsPayload,
   QueryResultPayload,
   TableIdentity,
@@ -182,7 +183,18 @@ export interface CassandraDeskApi {
   disconnect(profileId: string): Promise<ProfileListItem[]>;
   refreshSchema(profileId: string): Promise<AdapterSchema>;
   getTableSchema(table: TableIdentity): Promise<TableSchemaPayload>;
-  getPreview(table: TableIdentity, pageState?: string): Promise<PreviewRowsPayload>;
+  /**
+   * Fetch a page of preview rows. `pageState` continues an unrefined sweep
+   * (Cassandra continuation token / Postgres OFFSET token). `query` is an
+   * optional, additive server-side refinement — column filters, sort, and
+   * keyset cursor — pushed down to the engine; omit it for the original
+   * unfiltered behaviour.
+   */
+  getPreview(
+    table: TableIdentity,
+    pageState?: string,
+    query?: PreviewQuery,
+  ): Promise<PreviewRowsPayload>;
   runSelectQuery(profileId: string, cql: string, mode?: "read" | "write" | "all"): Promise<QueryResultPayload>;
   deleteTableRows(table: TableIdentity, rows: Array<Record<string, string>>): Promise<{ deleted: number }>;
   insertTableRow(table: TableIdentity, values: Record<string, string>): Promise<{ inserted: number }>;

@@ -6,7 +6,8 @@ import {
   DataTable,
   DataTableDeleteConfig,
   DataTableEditConfig,
-  DataTableInlineEditConfig
+  DataTableInlineEditConfig,
+  DataTableServerQueryConfig
 } from "../../components/ui/data-table/DataTable";
 import { computeRowId, Row } from "../../components/ui/data-table/types";
 import { PanelHeader } from "../../components/ui/PanelHeader";
@@ -36,6 +37,7 @@ export function DataPanel({
   const refreshPreview = useSchemaStore((state) => state.refreshPreviewSilent);
   const loadMorePreview = useSchemaStore((state) => state.loadMorePreview);
   const loadAllPreview = useSchemaStore((state) => state.loadAllPreview);
+  const applyServerQuery = useSchemaStore((state) => state.applyServerQuery);
   const previewLoadingMore = useSchemaStore((state) => state.previewLoadingMore);
   const previewLoadingAll = useSchemaStore((state) => state.previewLoadingAll);
   const setError = useStatusStore((state) => state.setError);
@@ -223,6 +225,13 @@ export function DataPanel({
     };
   }, [schema, canWrite, pkColumns, reloadSelectedTable, setError]);
 
+  // Push column filter/sort to the server (debounced inside DataTable). Only
+  // wired when a table schema is loaded — there's nothing to fetch otherwise.
+  const serverQueryConfig: DataTableServerQueryConfig | undefined = useMemo(() => {
+    if (!schema) return undefined;
+    return { onQueryChange: (query) => void applyServerQuery(query) };
+  }, [schema, applyServerQuery]);
+
   const hasMore = Boolean(preview?.pageState);
   const meta = preview ? `${preview.rows.length}${hasMore ? "+" : ""} rows` : "auto pageSize 1000";
 
@@ -313,6 +322,7 @@ export function DataPanel({
         {...(deleteConfig ? { deleteConfig } : {})}
         {...(editConfig ? { editConfig } : {})}
         {...(inlineEditConfig ? { inlineEditConfig } : {})}
+        {...(serverQueryConfig ? { serverQueryConfig } : {})}
       />
       {schema ? (
         <InsertRowDialog

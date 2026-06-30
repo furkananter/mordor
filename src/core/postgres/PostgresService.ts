@@ -10,6 +10,7 @@ import { ConnectionProfileWithPassword } from "../config/profile";
 import type { SshTunnelManager } from "../db/sshTunnel";
 import {
   ColumnMetadata,
+  PreviewQuery,
   PreviewRowsPayload,
   QueryResultPayload,
   TableIdentity,
@@ -17,6 +18,7 @@ import {
 } from "../shared/messages";
 import { PostgresSchemaNode } from "./types";
 import { serializePostgresRows } from "./serialize";
+import { buildPreviewQueryClauses, encodeCursor } from "./previewQuery";
 import { runPostgresExport } from "./exporter";
 import type { ExportResult } from "../export/types";
 
@@ -253,18 +255,50 @@ export class PostgresService {
   async fetchPreviewRows(
     table: TableIdentity,
     pageState?: string,
+    query?: PreviewQuery,
   ): Promise<PreviewRowsPayload> {
     const existing = this.requireConnection(table.profileId);
+    const hasSort = (query?.sort ?? []).some((s) => !!s.column);
+
+    if (hasSort) {
+      // KEYSET path: a sort is given, so page by the last row's sort-key tuple
+      // (carried in pageState as an opaque cursor) rather than an O(n) OFFSET.
+      // Filters are folded into the same WHERE. The cursor lives where Cassandra
+      // puts its continuation token, so the renderer's paging UI is engine-blind.
+      const cursorQuery: PreviewQuery = { ...query };
+      if (pageState) cursorQuery.cursor = pageState;
+      else delete cursorQuery.cursor;
+      const clauses = buildPreviewQueryClauses(cursorQuery, 2);
+      const where = clauses.whereSql ? ` ${clauses.whereSql}` : "";
+      const order = clauses.orderBySql ? ` ${clauses.orderBySql}` : "";
+      const result = await existing.client.query(
+        `SELECT * FROM ${quoteQualified(table.keyspace, table.table)}${where}${order} LIMIT $1`,
+        [POSTGRES_PREVIEW_LIMIT, ...clauses.params],
+      );
+      const rawRows = result.rows as Array<Record<string, unknown>>;
+      const columns = result.fields?.map((f) => f.name) ?? Object.keys(rawRows[0] ?? {});
+      const rows = serializePostgresRows(rawRows);
+      const payload: PreviewRowsPayload = { columns, rows, limit: POSTGRES_PREVIEW_LIMIT };
+      // Encode the next cursor from the final row only when the page was full —
+      // a short page proves the keyset has been exhausted.
+      const lastRow = rows[rows.length - 1];
+      if (rawRows.length === POSTGRES_PREVIEW_LIMIT && lastRow) {
+        const cursor = encodeCursor(lastRow, clauses.sort);
+        if (cursor) payload.pageState = cursor;
+      }
+      return payload;
+    }
+
+    // OFFSET path: no sort given. We still apply any filters server-side, but
+    // page by numeric OFFSET (carried in pageState). OFFSET is O(n) at the
+    // server; fine for the 100-row preview pages and matches the original
+    // behaviour when no query is supplied at all.
     const offset = parsePageStateOffset(pageState);
-    // Postgres has no opaque pageState token — we reuse the field to carry the
-    // numeric OFFSET so the renderer's existing "load more" UI works without
-    // knowing whether the DB is Cassandra or Postgres. OFFSET is O(n) at the
-    // server; this is fine for the 100-row preview pages we ship in v1 but is
-    // a known limitation. Keyset pagination is a follow-up once we surface PK
-    // columns reliably.
+    const clauses = buildPreviewQueryClauses(query, 3);
+    const where = clauses.whereSql ? ` ${clauses.whereSql}` : "";
     const result = await existing.client.query(
-      `SELECT * FROM ${quoteQualified(table.keyspace, table.table)} LIMIT $1 OFFSET $2`,
-      [POSTGRES_PREVIEW_LIMIT, offset],
+      `SELECT * FROM ${quoteQualified(table.keyspace, table.table)}${where} LIMIT $1 OFFSET $2`,
+      [POSTGRES_PREVIEW_LIMIT, offset, ...clauses.params],
     );
     const rawRows = result.rows as Array<Record<string, unknown>>;
     const columns = result.fields?.map((f) => f.name) ?? Object.keys(rawRows[0] ?? {});

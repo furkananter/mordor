@@ -2,6 +2,7 @@ import { checkServerIdentity } from "node:tls";
 import type * as cassandra from "cassandra-driver";
 import {
   ColumnMetadata,
+  PreviewQuery,
   QueryResultPayload,
   TableIdentity,
   TableSchemaPayload,
@@ -30,7 +31,7 @@ function driverSync(): typeof cassandra {
 }
 import { ConnectionProfileWithPassword } from "../config/profile";
 import type { SshTunnelManager } from "../db/sshTunnel";
-import { buildTablePreviewQuery, previewLimit, quoteIdentifier } from "./cql";
+import { buildCqlPreviewClause, buildTablePreviewQuery, previewLimit, quoteIdentifier } from "./cql";
 import { splitCqlStatements } from "./cqlSplit";
 import { isSchemaChange, waitForSchemaAgreement } from "./migrations/MigrationExecutor";
 import { normalizeQuery, QueryMode } from "./query";
@@ -241,6 +242,7 @@ export class CassandraService {
   async fetchPreviewRows(
     table: TableIdentity,
     pageState?: string,
+    previewQuery?: PreviewQuery,
   ): Promise<{
     columns: string[];
     rows: Record<string, string>[];
@@ -248,7 +250,23 @@ export class CassandraService {
     pageState?: string;
   }> {
     const existing = this.requireConnection(table.profileId);
-    const query = buildTablePreviewQuery(table.keyspace, table.table);
+    let query = buildTablePreviewQuery(table.keyspace, table.table);
+    let params: unknown[] = [];
+    // Best-effort server-side filtering. Equality on key columns is native;
+    // anything else falls back to ALLOW FILTERING, which scans the cluster —
+    // acceptable for an interactive preview but document the cost. Sort is left
+    // to the client (CQL ORDER BY only works on clustering cols in a partition).
+    if (previewQuery?.filters && previewQuery.filters.length > 0) {
+      const schema = await this.fetchTableSchema(table);
+      const keyColumns = new Set<string>([
+        ...schema.partitionKeys,
+        ...schema.clusteringKeys,
+      ]);
+      const clause = buildCqlPreviewClause(previewQuery, keyColumns);
+      query += clause.whereSql;
+      if (clause.needsAllowFiltering) query += " ALLOW FILTERING";
+      params = clause.params;
+    }
     const options: cassandra.QueryOptions = {
       // Deliberately NOT prepared. A prepared `SELECT *` freezes its result
       // metadata (the column list) at prepare time and caches it for the life
@@ -265,7 +283,7 @@ export class CassandraService {
     // when the final page is reached.
     if (pageState) options.pageState = pageState;
 
-    const result = await existing.client.execute(query, [], options);
+    const result = await existing.client.execute(query, params, options);
     const rawRows = result.rows.map((row) => ({
       ...(row as unknown as Record<string, unknown>),
     }));
