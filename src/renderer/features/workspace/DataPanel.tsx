@@ -274,6 +274,7 @@ export function DataPanel({
         columnTypes={columnTypes}
         enableSelection={Boolean(schema)}
         rowIdColumns={pkColumns}
+        {...(schema ? { exportTableName: schema.table.table } : {})}
         {...(liveEnabled && freshIds.size > 0 ? { highlightRowIds: freshIds } : {})}
         {...(deleteConfig ? { deleteConfig } : {})}
         {...(editConfig ? { editConfig } : {})}

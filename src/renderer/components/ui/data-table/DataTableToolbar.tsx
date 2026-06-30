@@ -1,5 +1,5 @@
 import { Column, Table } from "@tanstack/react-table";
-import { Check, ChevronDown, Clipboard, Columns3, Filter, Trash2 } from "lucide-react";
+import { Check, ChevronDown, Clipboard, Columns3, Download, Filter, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import {
   AlertDialog,
@@ -21,10 +21,30 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from "../DropdownMenu";
+import { buildResultExport, ResultExportFormat } from "./exportResults";
 import { COPY_FORMAT_LABELS, CopyFormat, formatRowsForCopy } from "./formatRows";
 import { Row, SELECT_COLUMN_ID } from "./types";
 
 const COPY_FORMATS: CopyFormat[] = ["json-pretty", "json", "ndjson", "markdown", "csv", "tsv"];
+
+const EXPORT_FORMAT_LABELS: Record<ResultExportFormat, string> = {
+  csv: "CSV",
+  json: "JSON",
+  sql: "SQL (INSERT)"
+};
+
+/** Triggers a browser download of `content` via a transient object-URL anchor. */
+function downloadBlob(content: string, mimeType: string, fileName: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+}
 
 export interface ToolbarDeleteConfig {
   label: string;
@@ -44,7 +64,8 @@ export function DataTableToolbar({
   onClearFilters,
   selectedCount = 0,
   onClearSelection,
-  deleteConfig
+  deleteConfig,
+  exportTableName
 }: {
   table: Table<Row>;
   totalRows: number;
@@ -55,6 +76,8 @@ export function DataTableToolbar({
   selectedCount?: number;
   onClearSelection?: () => void;
   deleteConfig?: ToolbarDeleteConfig;
+  /** When set, an extra SQL-INSERT export option is offered using this table name. */
+  exportTableName?: string;
 }) {
   const hideableColumns: Column<Row, unknown>[] = table
     .getAllColumns()
@@ -80,6 +103,21 @@ export function DataTableToolbar({
     if (!payload) return;
     void navigator.clipboard.writeText(payload);
     setCopiedFormat(format);
+  };
+
+  // Export the currently filtered rows, or the selection when one exists. Reads
+  // the same visible, non-select columns as the copy path.
+  const exportRows = (format: ResultExportFormat) => {
+    const model = selectedCount > 0 ? table.getSelectedRowModel() : table.getFilteredRowModel();
+    const rows = model.rows.map((row) => row.original);
+    const columns = table
+      .getVisibleLeafColumns()
+      .filter((column) => column.id !== SELECT_COLUMN_ID)
+      .map((column) => column.id);
+    if (rows.length === 0 || columns.length === 0) return;
+    const { content, mimeType, extension } = buildResultExport(format, columns, rows, exportTableName);
+    const base = exportTableName ?? "result";
+    downloadBlob(content, mimeType, `${base}.${extension}`);
   };
 
   const handleConfirm = async () => {
@@ -167,6 +205,27 @@ export function DataTableToolbar({
         <span className="text-[11.5px] text-muted">
           {filteredCount === totalRows ? `${totalRows} rows` : `${filteredCount} / ${totalRows} rows`}
         </span>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button tooltip={selectedCount > 0 ? "Export selected rows" : "Export displayed rows"}>
+              <Download size={12} strokeWidth={1.7} />
+              <span>Export</span>
+              <ChevronDown size={11} strokeWidth={1.7} className="text-subtle" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuLabel>
+              Export {selectedCount > 0 ? `${selectedCount} selected` : `${filteredCount}`} row
+              {(selectedCount > 0 ? selectedCount : filteredCount) === 1 ? "" : "s"} as
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onSelect={() => exportRows("csv")}>{EXPORT_FORMAT_LABELS.csv}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => exportRows("json")}>{EXPORT_FORMAT_LABELS.json}</DropdownMenuItem>
+            {exportTableName ? (
+              <DropdownMenuItem onSelect={() => exportRows("sql")}>{EXPORT_FORMAT_LABELS.sql}</DropdownMenuItem>
+            ) : null}
+          </DropdownMenuContent>
+        </DropdownMenu>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button tooltip="Columns">

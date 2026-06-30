@@ -59,7 +59,8 @@ function DataTableImpl({
   deleteConfig,
   editConfig,
   rowIdColumns,
-  highlightRowIds
+  highlightRowIds,
+  exportTableName
 }: {
   result: DataTablePayload | undefined;
   loading: boolean;
@@ -75,6 +76,8 @@ function DataTableImpl({
   rowIdColumns?: string[];
   /** Row IDs to render with a highlight (e.g. recently arrived in live mode). */
   highlightRowIds?: ReadonlySet<string>;
+  /** Enables the SQL-INSERT export option, using this table name (DataPanel only). */
+  exportTableName?: string;
 }) {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
@@ -179,6 +182,7 @@ function DataTableImpl({
         selectedCount={selectedRowsCount}
         onClearSelection={() => setRowSelection({})}
         {...(toolbarDelete ? { deleteConfig: toolbarDelete } : {})}
+        {...(exportTableName ? { exportTableName } : {})}
       />
 
       <DataTableBody
