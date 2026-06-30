@@ -1,0 +1,14 @@
+# Deterministic seed data for the Redis E2E scenarios.
+#
+# Pipe into the container with:
+#   redis-cli -h 127.0.0.1 -p 6379 < test/e2e/seed/redis.txt
+#
+# A handful of keys across a couple of types so the DB browser / key inspector
+# scenario has something to list, read, and delete.
+SELECT 0
+SET app:user:1 ada@example.com
+SET app:user:2 alan@example.com
+SET app:user:3 grace@example.com
+HSET app:profile:1 name "Ada Lovelace" active 1
+HSET app:profile:2 name "Alan Turing" active 1
+SADD app:active 1 2
