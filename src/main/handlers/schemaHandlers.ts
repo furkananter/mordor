@@ -93,10 +93,11 @@ export function createSchemaHandlers(
     ) => {
       const profile = await requireProfile(table.profileId);
       if (profile.type === "cassandra") return cassandra.deleteRows(table, rows);
-      // Postgres row delete UX is a planned follow-up. Until then we reject
-      // explicitly — otherwise a Postgres profileId would have been silently
-      // routed to cassandra.deleteRows, which on a name collision could
-      // DELETE from the wrong cluster.
+      if (profile.type === "postgres") return postgres.deleteRows(table, rows);
+      // Redis has no tabular row-delete concept here. We reject explicitly —
+      // otherwise an unhandled profileId would have been silently routed to
+      // cassandra.deleteRows, which on a name collision could DELETE from the
+      // wrong cluster.
       throw unsupported("deleteTableRows", profile);
     },
     [ipcChannels.insertTableRow]: async (
