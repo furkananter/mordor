@@ -80,6 +80,7 @@ export function ClusterWorkspace({
             onRun={onRun}
             placeholder={`-- Run CQL against ${profile.name}\nSELECT keyspace_name, table_name FROM system_schema.tables;`}
             history={history}
+            profileId={profile.id}
           />
         </TabPanel>
         <TabPanel active={tab === "migrations"}>
