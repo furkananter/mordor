@@ -4,7 +4,7 @@ import { ConnectionProfile } from "../../core/config/profile";
 import { AdapterSchema } from "../../core/db/types";
 import { ipcChannels } from "../../core/ipc";
 import { PostgresService } from "../../core/postgres/PostgresService";
-import { TableIdentity } from "../../core/shared/messages";
+import { PreviewQuery, TableIdentity } from "../../core/shared/messages";
 import { ProfileStore } from "../ProfileStore";
 
 /**
@@ -66,10 +66,14 @@ export function createSchemaHandlers(
       if (profile.type === "postgres") return postgres.fetchTableSchema(table);
       throw unsupported("getTableSchema", profile);
     },
-    [ipcChannels.getPreview]: async (table: TableIdentity, pageState?: string) => {
+    [ipcChannels.getPreview]: async (
+      table: TableIdentity,
+      pageState?: string,
+      query?: PreviewQuery,
+    ) => {
       const profile = await requireProfile(table.profileId);
-      if (profile.type === "cassandra") return cassandra.fetchPreviewRows(table, pageState);
-      if (profile.type === "postgres") return postgres.fetchPreviewRows(table, pageState);
+      if (profile.type === "cassandra") return cassandra.fetchPreviewRows(table, pageState, query);
+      if (profile.type === "postgres") return postgres.fetchPreviewRows(table, pageState, query);
       throw unsupported("getPreview", profile);
     },
     [ipcChannels.runSelectQuery]: async (

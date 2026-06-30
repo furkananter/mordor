@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { PreviewRowsPayload, TableIdentity, TableSchemaPayload } from "../../core/shared/messages";
+import { PreviewQuery, PreviewRowsPayload, TableIdentity, TableSchemaPayload } from "../../core/shared/messages";
 import { defaultQueryForTable } from "../lib/cql";
 import { LoadState } from "./constants";
 import { runWithStatus, useStatusStore } from "./status";
@@ -46,6 +46,14 @@ export function clearProfilePreviewCache(profileId: string): void {
   }
 }
 
+/** True when a query carries any server-pushable filter or sort. */
+function hasServerQuery(query: PreviewQuery | undefined): boolean {
+  if (!query) return false;
+  const filters = query.filters ?? [];
+  const sort = query.sort ?? [];
+  return filters.some((f) => !!f.column) || sort.some((s) => !!s.column);
+}
+
 interface SchemaState {
   selectedTable: TableIdentity | undefined;
   selectedProfileId: string | undefined;
@@ -56,6 +64,13 @@ interface SchemaState {
   previewLoadingMore: boolean;
   /** True while a "load every remaining page" sweep is in flight. */
   previewLoadingAll: boolean;
+  /**
+   * The active server-side filter/sort, when the user has pushed one down via
+   * the data table. Undefined means the plain unfiltered preview. Paging
+   * (loadMore/loadAll) and live refresh thread this through so the server keeps
+   * applying the same predicate.
+   */
+  serverQuery: PreviewQuery | undefined;
 }
 
 interface SchemaActions {
@@ -68,6 +83,13 @@ interface SchemaActions {
   refreshPreviewSilent(): Promise<void>;
   loadMorePreview(): Promise<void>;
   loadAllPreview(): Promise<void>;
+  /**
+   * Push a filter/sort to the server and replace the preview with the first
+   * page of the refined result. Passing an empty/undefined query clears the
+   * server query and reloads the plain preview. Safe to call repeatedly (the
+   * data table debounces); the latest call wins.
+   */
+  applyServerQuery(query: PreviewQuery | undefined): Promise<void>;
   clearTable(): void;
 }
 
@@ -88,6 +110,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
   tableState: "idle",
   previewLoadingMore: false,
   previewLoadingAll: false,
+  serverQuery: undefined,
 
   openTable: async (table) => {
     const cached = getPreviewCache(table);
@@ -97,6 +120,8 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       selectedProfileId: table.profileId,
       schema: undefined,
       preview: cached,
+      // A new table starts with no server-side query — its column filters reset.
+      serverQuery: undefined,
       // Show as "loaded" immediately when we have cached rows — user sees data
       // right away while the schema metadata loads silently in the background.
       tableState: cached ? "loaded" : "loading"
@@ -147,7 +172,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
     if (!selected || !pageState || get().previewLoadingMore) return;
     set({ previewLoadingMore: true });
     try {
-      const next = await window.cassandraDesk.getPreview(selected, pageState);
+      const next = await window.cassandraDesk.getPreview(selected, pageState, get().serverQuery);
       if (!sameTable(get().selectedTable, selected)) return;
       const previous = get().preview;
       if (!previous) return;
@@ -158,7 +183,9 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       };
       if (next.pageState) merged.pageState = next.pageState;
       set({ preview: merged });
-      setPreviewCache(selected, merged);
+      // Only the plain (unfiltered) preview is cached — caching filtered pages
+      // would poison the next unfiltered open with the filtered subset.
+      if (!get().serverQuery) setPreviewCache(selected, merged);
     } catch (caught) {
       useStatusStore.getState().setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
@@ -184,7 +211,7 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
             );
           break;
         }
-        const next = await window.cassandraDesk.getPreview(selected, pageState);
+        const next = await window.cassandraDesk.getPreview(selected, pageState, get().serverQuery);
         if (!sameTable(get().selectedTable, selected)) return;
         const previous = get().preview;
         if (!previous) return;
@@ -195,13 +222,38 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
         };
         if (next.pageState) merged.pageState = next.pageState;
         set({ preview: merged });
-        setPreviewCache(selected, merged);
+        // Only the plain (unfiltered) preview is cached — caching filtered pages
+        // would poison the next unfiltered open with the filtered subset.
+        if (!get().serverQuery) setPreviewCache(selected, merged);
       }
     } catch (caught) {
       useStatusStore.getState().setError(caught instanceof Error ? caught.message : String(caught));
     } finally {
       set({ previewLoadingAll: false });
     }
+  },
+
+  applyServerQuery: async (query) => {
+    const selected = get().selectedTable;
+    if (!selected) return;
+    const effective = hasServerQuery(query) ? query : undefined;
+    set({ serverQuery: effective });
+    await runWithStatus("Filtering", async () => {
+      try {
+        const next = await window.cassandraDesk.getPreview(selected, undefined, effective);
+        // Guard against an out-of-order resolution: only commit when this is
+        // still the active table AND query (a newer applyServerQuery may have
+        // superseded us while the fetch was in flight).
+        if (!sameTable(get().selectedTable, selected)) return;
+        if (get().serverQuery !== effective) return;
+        set({ preview: next, tableState: "loaded" });
+        // Only the plain (unfiltered) preview is cached — refreshing the cache
+        // here would poison the next unfiltered open with filtered rows.
+        if (!effective) setPreviewCache(selected, next);
+      } catch (caught) {
+        useStatusStore.getState().setError(caught instanceof Error ? caught.message : String(caught));
+      }
+    });
   },
 
   refreshPreviewSilent: async () => {
@@ -216,12 +268,15 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       // ponytail: live mode tracks the first page; rows loaded via "Load more"/
       // "Load all" collapse back to page one on the next tick — acceptable, you
       // don't bulk-load and live-watch the same table at once.
-      const next = await window.cassandraDesk.getPreview(selected);
+      const next = await window.cassandraDesk.getPreview(selected, undefined, get().serverQuery);
       if (!sameTable(get().selectedTable, selected)) return;
       const current = get().preview;
       if (current && previewsEqual(current, next)) return;
       set({ preview: next });
-      setPreviewCache(selected, next);
+      // Only the plain (unfiltered) preview is cached — caching a filtered
+      // live-poll result would poison the next unfiltered open with the
+      // filtered subset.
+      if (!get().serverQuery) setPreviewCache(selected, next);
     } catch {
       // Live polling failures are silent — keep prior preview, surface nothing.
     }
@@ -233,7 +288,8 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       selectedTable: undefined,
       schema: undefined,
       preview: undefined,
-      tableState: "idle"
+      tableState: "idle",
+      serverQuery: undefined
     });
     useLayoutStore.getState().setActiveTab("cql");
     useLayoutStore.getState().setLastNavigation(profileId, undefined);
@@ -248,7 +304,8 @@ export const useSchemaStore = create<SchemaState & SchemaActions>((set, get) => 
       selectedProfileId: undefined,
       schema: undefined,
       preview: undefined,
-      tableState: "idle"
+      tableState: "idle",
+      serverQuery: undefined
     });
     useLayoutStore.getState().setActiveTab("data");
     useLayoutStore.getState().setLastNavigation(undefined);

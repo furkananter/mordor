@@ -10,7 +10,8 @@ import {
   useReactTable
 } from "@tanstack/react-table";
 import { Copy, Maximize2, Minimize2, Pencil, X } from "lucide-react";
-import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PreviewQuery } from "../../../../core/shared/messages";
 import { usePreferencesStore } from "../../../store/preferences";
 import { useLayoutStore } from "../../../store/layout";
 import { ROW_DETAIL_MAX_HEIGHT } from "../../../store/constants";
@@ -51,6 +52,52 @@ export interface DataTableInlineEditConfig {
   enabled?: boolean;
 }
 
+/**
+ * Opt-in server-side filter/sort. When provided, the table's column-filter and
+ * sort state is (debounced and) pushed to the server via `onQueryChange`, which
+ * refetches the matching page rather than only filtering the loaded rows. The
+ * client-side filter/sort row models stay active too, so an applicable subset
+ * (e.g. a sort the server couldn't satisfy) still narrows the visible page —
+ * the server path is an enhancement, not a replacement.
+ */
+export interface DataTableServerQueryConfig {
+  onQueryChange(query: PreviewQuery | undefined): void;
+  /** Debounce window in ms for coalescing rapid filter keystrokes. Default 300. */
+  debounceMs?: number;
+}
+
+/**
+ * Translate the TanStack column-filter + sorting state into the engine-agnostic
+ * {@link PreviewQuery}. Text column filters become `contains` (the same
+ * substring semantics the client-side `includesString` filter uses); date
+ * filters become an `eq` on the ISO date. Pure so it can be unit-tested.
+ */
+export function buildServerQuery(
+  columnFilters: ColumnFiltersState,
+  sorting: SortingState,
+): PreviewQuery | undefined {
+  const filters = columnFilters
+    .map((filter) => {
+      const raw = filter.value;
+      if (raw instanceof Date) {
+        return { column: filter.id, op: "eq" as const, value: raw.toISOString() };
+      }
+      if (typeof raw === "string" && raw.trim() !== "") {
+        return { column: filter.id, op: "contains" as const, value: raw };
+      }
+      return undefined;
+    })
+    .filter((entry): entry is { column: string; op: "eq" | "contains"; value: string } => entry !== undefined);
+
+  const sort = sorting.map((s) => ({ column: s.id, dir: s.desc ? ("desc" as const) : ("asc" as const) }));
+
+  if (filters.length === 0 && sort.length === 0) return undefined;
+  const query: PreviewQuery = {};
+  if (filters.length > 0) query.filters = filters;
+  if (sort.length > 0) query.sort = sort;
+  return query;
+}
+
 // Memo'd because parents (DataPanel, CqlPanel) feed referentially stable props
 // — the preview result is deep-equal short-circuited on live-mode ticks,
 // columnTypes/pkColumns/deleteConfig are useMemo'd, and the page-size + flags
@@ -68,6 +115,7 @@ function DataTableImpl({
   deleteConfig,
   editConfig,
   inlineEditConfig,
+  serverQueryConfig,
   rowIdColumns,
   highlightRowIds,
   exportTableName
@@ -83,6 +131,8 @@ function DataTableImpl({
   deleteConfig?: DataTableDeleteConfig;
   editConfig?: DataTableEditConfig;
   inlineEditConfig?: DataTableInlineEditConfig;
+  /** When set, filter/sort changes are also pushed to the server (debounced). */
+  serverQueryConfig?: DataTableServerQueryConfig;
   /** Column names whose concatenation forms a stable row id (e.g. primary keys). */
   rowIdColumns?: string[];
   /** Row IDs to render with a highlight (e.g. recently arrived in live mode). */
@@ -146,6 +196,34 @@ function DataTableImpl({
   });
 
   const selectedRowsCount = useMemo(() => Object.values(rowSelection).filter(Boolean).length, [rowSelection]);
+
+  // Server-side filter/sort: debounce the column-filter + sort state into a
+  // PreviewQuery and hand it to the parent (which refetches). A ref holds the
+  // last-sent serialized query so we don't refetch when nothing meaningful
+  // changed, and we skip the initial empty→undefined emit so opening a table
+  // doesn't trigger a redundant reload of the page it just loaded.
+  const onQueryChange = serverQueryConfig?.onQueryChange;
+  const debounceMs = serverQueryConfig?.debounceMs ?? 300;
+  const lastSentRef = useRef<string | undefined>(undefined);
+  const serverQuery = useMemo(
+    () => (onQueryChange ? buildServerQuery(columnFilters, sorting) : undefined),
+    [onQueryChange, columnFilters, sorting]
+  );
+  useEffect(() => {
+    if (!onQueryChange) return;
+    const serialized = serverQuery ? JSON.stringify(serverQuery) : "";
+    if (lastSentRef.current === undefined && serialized === "") {
+      // First render with no active query — nothing to push yet.
+      lastSentRef.current = "";
+      return;
+    }
+    if (lastSentRef.current === serialized) return;
+    const handle = window.setTimeout(() => {
+      lastSentRef.current = serialized;
+      onQueryChange(serverQuery);
+    }, debounceMs);
+    return () => window.clearTimeout(handle);
+  }, [onQueryChange, serverQuery, debounceMs]);
 
   // Resolve the live row object for the expanded key on every render, so the
   // detail panel always reflects the latest values (and closes itself if the
