@@ -42,6 +42,15 @@ export interface DataTableEditConfig {
   disabledReason?: string;
 }
 
+export interface DataTableInlineEditConfig {
+  /** Persist a single cell change. Rejecting (throwing) leaves the cell in its prior value. */
+  onCommit(row: Row, column: string, value: string): Promise<void>;
+  /** Returns true when a column may be edited inline (e.g. not a primary key). */
+  editableColumn(column: string): boolean;
+  /** When false, double-click-to-edit is disabled entirely. Defaults to true. */
+  enabled?: boolean;
+}
+
 // Memo'd because parents (DataPanel, CqlPanel) feed referentially stable props
 // — the preview result is deep-equal short-circuited on live-mode ticks,
 // columnTypes/pkColumns/deleteConfig are useMemo'd, and the page-size + flags
@@ -58,6 +67,7 @@ function DataTableImpl({
   enableSelection = false,
   deleteConfig,
   editConfig,
+  inlineEditConfig,
   rowIdColumns,
   highlightRowIds,
   exportTableName
@@ -72,6 +82,7 @@ function DataTableImpl({
   enableSelection?: boolean;
   deleteConfig?: DataTableDeleteConfig;
   editConfig?: DataTableEditConfig;
+  inlineEditConfig?: DataTableInlineEditConfig;
   /** Column names whose concatenation forms a stable row id (e.g. primary keys). */
   rowIdColumns?: string[];
   /** Row IDs to render with a highlight (e.g. recently arrived in live mode). */
@@ -189,6 +200,8 @@ function DataTableImpl({
         table={table}
         columnCount={columns.length}
         onRowClick={handleRowClick}
+        {...(columnTypes ? { columnTypes } : {})}
+        {...(inlineEditConfig ? { inlineEditConfig } : {})}
         {...(highlightRowIds ? { highlightRowIds } : {})}
       />
 

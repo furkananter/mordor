@@ -1,7 +1,7 @@
 import { Table, flexRender } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
-import { memo, useRef } from "react";
+import { memo, useCallback, useRef, useState } from "react";
 import {
   Table as UiTable,
   TableBody,
@@ -10,7 +10,14 @@ import {
   TableHeader,
   TableRow
 } from "../Table";
+import { DataTableInlineEditConfig } from "./DataTable";
 import { Row, SELECT_COLUMN_ID } from "./types";
+
+function isBooleanType(type: string | undefined): boolean {
+  if (!type) return false;
+  const lowered = type.toLowerCase();
+  return lowered === "boolean" || lowered === "bool";
+}
 
 // Approximate height (px) of a rendered row. The virtualizer uses this to size
 // the spacer and pick the visible window; it then measures real heights as
@@ -27,17 +34,71 @@ const VIRTUALIZE_AFTER = 100;
 export function DataTableBody({
   table,
   columnCount,
+  columnTypes,
+  inlineEditConfig,
   highlightRowIds,
   onRowClick
 }: {
   table: Table<Row>;
   columnCount: number;
+  columnTypes?: Record<string, string> | undefined;
+  inlineEditConfig?: DataTableInlineEditConfig;
   highlightRowIds?: ReadonlySet<string>;
   onRowClick?: (row: Row) => void;
 }) {
   const rows = table.getRowModel().rows;
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldVirtualize = rows.length > VIRTUALIZE_AFTER;
+
+  // The cell currently being edited inline, keyed by the TanStack row id plus
+  // the column id. Only one cell is editable at a time. `saving` blocks input
+  // and re-entry while the commit promise is in flight.
+  const inlineEnabled = Boolean(inlineEditConfig) && inlineEditConfig?.enabled !== false;
+  const [editingCell, setEditingCell] = useState<{ rowId: string; columnId: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const canEditColumn = useCallback(
+    (columnId: string) =>
+      inlineEnabled && columnId !== SELECT_COLUMN_ID && (inlineEditConfig?.editableColumn(columnId) ?? false),
+    [inlineEnabled, inlineEditConfig]
+  );
+
+  const startEditing = useCallback(
+    (rowId: string, columnId: string) => {
+      if (!canEditColumn(columnId)) return;
+      setEditingCell({ rowId, columnId });
+    },
+    [canEditColumn]
+  );
+
+  const cancelEditing = useCallback(() => {
+    setEditingCell(null);
+  }, []);
+
+  const commitEditing = useCallback(
+    async (row: Row, columnId: string, value: string) => {
+      if (!inlineEditConfig) return;
+      const previous = row[columnId] ?? "";
+      // No change → just close the editor without a round-trip.
+      if (value === previous) {
+        setEditingCell(null);
+        return;
+      }
+      setSaving(true);
+      try {
+        await inlineEditConfig.onCommit(row, columnId, value);
+        setEditingCell(null);
+      } catch (error) {
+        // The parent surfaces the error; keep the editor open so the user can
+        // retry or press Esc to discard. Re-throw so the editor re-arms its
+        // commit guard and a subsequent Enter/blur can retry.
+        throw error;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [inlineEditConfig]
+  );
 
   const virtualizer = useVirtualizer({
     count: shouldVirtualize ? rows.length : 0,
@@ -156,6 +217,13 @@ export function DataTableBody({
                   isFresh={highlightRowIds?.has(row.id) ?? false}
                   offsetY={virtualRow.start}
                   tableWidth={tableWidth}
+                  editingColumnId={editingCell?.rowId === row.id ? editingCell.columnId : null}
+                  saving={saving}
+                  canEditColumn={canEditColumn}
+                  onStartEdit={startEditing}
+                  onCancelEdit={cancelEditing}
+                  onCommitEdit={commitEditing}
+                  {...(columnTypes ? { columnTypes } : {})}
                   {...(onRowClick ? { onRowClick } : {})}
                 />
               );
@@ -168,6 +236,13 @@ export function DataTableBody({
                 isSelected={row.getIsSelected()}
                 isFresh={highlightRowIds?.has(row.id) ?? false}
                 tableWidth={tableWidth}
+                editingColumnId={editingCell?.rowId === row.id ? editingCell.columnId : null}
+                saving={saving}
+                canEditColumn={canEditColumn}
+                onStartEdit={startEditing}
+                onCancelEdit={cancelEditing}
+                onCommitEdit={commitEditing}
+                {...(columnTypes ? { columnTypes } : {})}
                 {...(onRowClick ? { onRowClick } : {})}
               />
             ))
@@ -188,12 +263,21 @@ export function DataTableBody({
 // The TanStack `row` reference is stable across selection/scroll/live ticks
 // (the core row model is only rebuilt on sort/filter/data change), so the memo
 // holds for everything except genuine content changes.
+//   - editingColumnId       → the column being inline-edited in *this* row (or null)
+//   - saving                → blocks the inline editor while a commit is in flight
 const RenderedRow = memo(function RenderedRow({
   row,
   isSelected,
   isFresh,
   offsetY,
   tableWidth,
+  columnTypes,
+  editingColumnId,
+  saving,
+  canEditColumn,
+  onStartEdit,
+  onCancelEdit,
+  onCommitEdit,
   onRowClick
 }: {
   row: import("@tanstack/react-table").Row<Row>;
@@ -201,6 +285,13 @@ const RenderedRow = memo(function RenderedRow({
   isFresh: boolean;
   offsetY?: number;
   tableWidth: number;
+  columnTypes?: Record<string, string> | undefined;
+  editingColumnId?: string | null;
+  saving?: boolean;
+  canEditColumn?: (columnId: string) => boolean;
+  onStartEdit?: (rowId: string, columnId: string) => void;
+  onCancelEdit?: () => void;
+  onCommitEdit?: (row: Row, columnId: string, value: string) => void | Promise<void>;
   onRowClick?: (row: Row) => void;
 }) {
   const style: React.CSSProperties =
@@ -240,11 +331,43 @@ const RenderedRow = memo(function RenderedRow({
             </TableCell>
           );
         }
+        const columnId = cell.column.id;
+        const editable = canEditColumn?.(columnId) ?? false;
+        const isEditing = editingColumnId === columnId;
+        if (isEditing && onCommitEdit && onCancelEdit) {
+          return (
+            <TableCell
+              key={cell.id}
+              style={{ width: cell.column.getSize(), flexShrink: 0 }}
+              className="!px-1 flex items-center"
+              // Don't let the active editor bubble a click up into row-detail toggle.
+              onClick={(event) => event.stopPropagation()}
+            >
+              <InlineCellEditor
+                initialValue={row.original[columnId] ?? ""}
+                isBoolean={isBooleanType(columnTypes?.[columnId])}
+                disabled={saving ?? false}
+                onCommit={(value) => onCommitEdit(row.original, columnId, value)}
+                onCancel={onCancelEdit}
+              />
+            </TableCell>
+          );
+        }
         return (
           <TableCell
             key={cell.id}
             style={{ width: cell.column.getSize(), flexShrink: 0 }}
-            className="flex items-center"
+            className={`flex items-center${editable ? " cursor-text data-[editable=true]:hover:bg-accent/5" : ""}`}
+            data-editable={editable ? "true" : undefined}
+            title={editable ? "Double-click to edit" : undefined}
+            onDoubleClick={
+              editable && onStartEdit
+                ? (event) => {
+                    event.stopPropagation();
+                    onStartEdit(row.id, columnId);
+                  }
+                : undefined
+            }
           >
             <span className="truncate">{flexRender(cell.column.columnDef.cell, cell.getContext())}</span>
           </TableCell>
@@ -253,6 +376,89 @@ const RenderedRow = memo(function RenderedRow({
     </TableRow>
   );
 });
+
+/**
+ * The transient input/select rendered in place of a cell during inline editing.
+ * Enter commits, Esc cancels, blur commits (matching the spec). Booleans use a
+ * three-state select (null / true / false) mirroring the row dialog.
+ */
+function InlineCellEditor({
+  initialValue,
+  isBoolean,
+  disabled,
+  onCommit,
+  onCancel
+}: {
+  initialValue: string;
+  isBoolean: boolean;
+  disabled: boolean;
+  onCommit(value: string): void | Promise<void>;
+  onCancel(): void;
+}) {
+  const [value, setValue] = useState(initialValue);
+  // A commit may fire from both Enter and the ensuing blur; guard so it runs once.
+  // On failure the editor stays open, so re-arm the guard to allow a retry.
+  const committedRef = useRef(false);
+
+  const commit = useCallback(async () => {
+    if (committedRef.current) return;
+    committedRef.current = true;
+    try {
+      await onCommit(value);
+    } catch {
+      // Commit failed and the editor remains open; re-arm so Enter/blur can retry.
+      committedRef.current = false;
+    }
+  }, [onCommit, value]);
+
+  const cancel = useCallback(() => {
+    committedRef.current = true;
+    onCancel();
+  }, [onCancel]);
+
+  const handleKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      commit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancel();
+    }
+  };
+
+  if (isBoolean) {
+    return (
+      <select
+        autoFocus
+        value={value}
+        disabled={disabled}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={handleKeyDown}
+        onBlur={commit}
+        className="min-h-[24px] w-full rounded-ui border border-accent bg-panel px-1 py-0.5 text-[12px] text-text focus-visible:outline-none"
+      >
+        <option value="">null</option>
+        <option value="true">true</option>
+        <option value="false">false</option>
+      </select>
+    );
+  }
+
+  return (
+    <input
+      autoFocus
+      value={value}
+      disabled={disabled}
+      spellCheck={false}
+      autoComplete="off"
+      onChange={(event) => setValue(event.target.value)}
+      onKeyDown={handleKeyDown}
+      onBlur={commit}
+      onFocus={(event) => event.currentTarget.select()}
+      className="min-h-[24px] w-full rounded-ui border border-accent bg-panel px-1 py-0.5 font-mono text-[12px] text-text focus-visible:outline-none"
+    />
+  );
+}
 
 function SelectionCheckbox({
   checked,

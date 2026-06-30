@@ -2,7 +2,12 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronsDown, Plus, Radio } from "lucide-react";
 import { PreviewRowsPayload, TableSchemaPayload } from "../../../core/shared/messages";
 import { Button } from "../../components/ui/Button";
-import { DataTable, DataTableDeleteConfig, DataTableEditConfig } from "../../components/ui/data-table/DataTable";
+import {
+  DataTable,
+  DataTableDeleteConfig,
+  DataTableEditConfig,
+  DataTableInlineEditConfig
+} from "../../components/ui/data-table/DataTable";
 import { computeRowId, Row } from "../../components/ui/data-table/types";
 import { PanelHeader } from "../../components/ui/PanelHeader";
 import { InsertRowDialog } from "./InsertRowDialog";
@@ -189,6 +194,35 @@ export function DataPanel({
     };
   }, [schema, canWrite, pkColumns]);
 
+  // Inline (double-click) cell editing config. Builds the row's primary-key
+  // map from its current cell values, then calls the same updateTableRow IPC the
+  // row dialog uses for just the one changed column. Mirrors editConfig's
+  // stable-reference memoization so DataTable's memo isn't defeated per tick.
+  const inlineEditConfig: DataTableInlineEditConfig | undefined = useMemo(() => {
+    if (!schema) return undefined;
+    const hasPk = pkColumns.length > 0;
+    const pkSet = new Set(pkColumns);
+    return {
+      enabled: canWrite && hasPk,
+      // Only non-key columns can be edited inline — key columns identify the
+      // row and are edited via the full row dialog (a DELETE + INSERT).
+      editableColumn: (column) => !pkSet.has(column),
+      onCommit: async (row, column, value) => {
+        const keys = pkColumns.reduce<Record<string, string>>((acc, key) => {
+          acc[key] = row[key] ?? "";
+          return acc;
+        }, {});
+        try {
+          await window.cassandraDesk.updateTableRow(schema.table, keys, { [column]: value });
+          await reloadSelectedTable();
+        } catch (caught) {
+          setError(caught instanceof Error ? caught.message : String(caught));
+          throw caught;
+        }
+      }
+    };
+  }, [schema, canWrite, pkColumns, reloadSelectedTable, setError]);
+
   const hasMore = Boolean(preview?.pageState);
   const meta = preview ? `${preview.rows.length}${hasMore ? "+" : ""} rows` : "auto pageSize 1000";
 
@@ -278,6 +312,7 @@ export function DataPanel({
         {...(liveEnabled && freshIds.size > 0 ? { highlightRowIds: freshIds } : {})}
         {...(deleteConfig ? { deleteConfig } : {})}
         {...(editConfig ? { editConfig } : {})}
+        {...(inlineEditConfig ? { inlineEditConfig } : {})}
       />
       {schema ? (
         <InsertRowDialog
