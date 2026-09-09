@@ -87,6 +87,19 @@ describe("IPC handler map", () => {
     expect(cassandra.runSelectQuery).toHaveBeenCalledWith("p1", "SELECT * FROM users", undefined);
   });
 
+  it("dispatches a benchmark run to CassandraService and returns its result", async () => {
+    const steps = [{ stepId: "s1", cql: "SELECT 1", repeat: 2, concurrency: 1 }];
+    const runResult = { totalDurationMs: 5, steps: [] };
+    const cassandra = {
+      runBenchmarkScenario: vi.fn().mockResolvedValue(runResult),
+    } as unknown as CassandraService;
+    const ctx = buildContext({ cassandra });
+    const handlers = createIpcHandlerMap(ctx);
+
+    await expect(handlers[ipcChannels.runBenchmark]("p1", steps, "read")).resolves.toEqual(runResult);
+    expect(cassandra.runBenchmarkScenario).toHaveBeenCalledWith("p1", steps, "read", expect.any(Function));
+  });
+
   it("updates a row through the service matching the profile type", async () => {
     const table = { profileId: "p1", profileName: "Local", keyspace: "app", table: "orders" };
     const keys = { id: "abc" };

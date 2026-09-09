@@ -6,6 +6,7 @@ import { PostgresAdapter } from "../adapters/PostgresAdapter";
 import { RedisAdapter } from "../adapters/RedisAdapter";
 import { ProfileStore } from "../ProfileStore";
 import { SshTunnel } from "../ssh/SshTunnel";
+import { createBenchmarkHandlers } from "./benchmarkHandlers";
 import { createExportHandlers } from "./export-handlers";
 import { createMigrationHandlers } from "./migrationHandlers";
 import { createProfileHandlers } from "./profileHandlers";
@@ -46,5 +47,6 @@ export function createIpcHandlerMap(ctx: MainContext) {
     ...createMigrationHandlers(ctx.cassandra),
     ...createRedisHandlers(ctx.redis),
     ...createExportHandlers(ctx.store, ctx.cassandra, ctx.postgres, ctx.redis),
+    ...createBenchmarkHandlers(ctx.cassandra),
   };
 }

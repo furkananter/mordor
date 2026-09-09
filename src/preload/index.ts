@@ -31,6 +31,18 @@ const api: CassandraDeskApi = {
   getTableDdl: (table) => ipcRenderer.invoke(ipcChannels.getTableDdl, table),
   runSchemaScript: (profileId, cql) =>
     ipcRenderer.invoke(ipcChannels.runSchemaScript, profileId, cql),
+  runBenchmark: (profileId, steps, mode) =>
+    ipcRenderer.invoke(ipcChannels.runBenchmark, profileId, steps, mode),
+  onBenchmarkProgress: (callback) => {
+    const listener = (
+      _event: unknown,
+      progress: { stepId: string; index: number; total: number },
+    ) => callback(progress);
+    ipcRenderer.on("benchmark:progress", listener);
+    return () => ipcRenderer.off("benchmark:progress", listener);
+  },
+  exportBenchmarkReport: (outputDir, report) =>
+    ipcRenderer.invoke(ipcChannels.exportBenchmarkReport, outputDir, report),
   pickMigrationsFolder: () =>
     ipcRenderer.invoke(ipcChannels.pickMigrationsFolder),
   listMigrations: (profileId, keyspace, folder) =>
