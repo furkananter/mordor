@@ -8,8 +8,15 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui/DropdownMenu";
+import {
+  BENCHMARK_TEMPLATES,
+  BenchmarkTemplate,
+  templateTargetFromSchema,
+} from "../../../core/cassandra/benchmarkTemplates";
 import { Input } from "../../components/ui/Input";
 import { PanelHeader } from "../../components/ui/PanelHeader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/Select";
@@ -34,8 +41,28 @@ export function BenchmarkPanel({ profile }: { profile: ProfileListItem }) {
   const [selectedId, setSelectedId] = useState<string | undefined>(ownScenarios[0]?.id);
   const selected = ownScenarios.find((scenario) => scenario.id === selectedId);
 
-  const handleCreate = () => {
-    const scenario = createScenario(`Scenario ${ownScenarios.length + 1}`, profile.id);
+  const addStep = useBenchmarkStore((state) => state.addStep);
+
+  const handleCreate = (template?: BenchmarkTemplate) => {
+    const scenario = createScenario(
+      template ? template.name : `Scenario ${ownScenarios.length + 1}`,
+      profile.id,
+    );
+    if (template) {
+      // Point the template at a real table when the cluster's schema is
+      // loaded; templateTargetFromSchema falls back to placeholders otherwise.
+      const target = templateTargetFromSchema(
+        profile.schema.kind === "cassandra" ? profile.schema.keyspaces : [],
+      );
+      for (const step of template.buildSteps(target)) {
+        addStep(scenario.id, {
+          source: "adhoc",
+          cql: step.cql,
+          repeat: step.repeat,
+          concurrency: step.concurrency,
+        });
+      }
+    }
     setSelectedId(scenario.id);
   };
 
@@ -47,10 +74,39 @@ export function BenchmarkPanel({ profile }: { profile: ProfileListItem }) {
         actions={
           <div className="flex items-center gap-2">
             <ScenarioPicker scenarios={ownScenarios} selectedId={selectedId} onSelect={setSelectedId} />
-            <Button variant="ghost" onClick={handleCreate} tooltip="New scenario">
-              <Plus size={12} strokeWidth={1.7} />
-              <span>New scenario</span>
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" tooltip="New scenario">
+                  <Plus size={12} strokeWidth={1.7} />
+                  <span>New scenario</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="max-w-[440px] min-w-[300px]">
+                <DropdownMenuLabel>Start from a template</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {BENCHMARK_TEMPLATES.map((template) => (
+                  <DropdownMenuItem
+                    key={template.id}
+                    onSelect={() => handleCreate(template)}
+                    className="flex-col items-start gap-0.5"
+                  >
+                    <span className="text-[12px] text-text">
+                      {template.name}
+                      {template.mutates ? (
+                        <span className="ml-1.5 text-[10.5px] uppercase tracking-[0.06em] text-warning">
+                          write mode
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="whitespace-normal text-[10.5px] leading-snug text-subtle">
+                      {template.description}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => handleCreate()}>Blank scenario</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         }
       />
