@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Play, Plus, Trash2 } from "lucide-react";
 import { BenchmarkRunResult } from "../../../core/cassandra/benchmark";
+import { deltaPercent } from "../../../core/cassandra/benchmarkReport";
 import { ProfileListItem } from "../../../core/ipc";
 import { Button } from "../../components/ui/Button";
 import {
@@ -187,6 +188,7 @@ function ScenarioEditor({
       </div>
 
       <RunControls scenario={scenario} profile={profile} runs={runs} />
+      <CompareView scenario={scenario} runs={runs} />
     </div>
   );
 }
@@ -400,6 +402,123 @@ function RunControls({
           </ul>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function CompareView({ scenario, runs }: { scenario: BenchmarkScenario; runs: BenchmarkRun[] }) {
+  const [beforeId, setBeforeId] = useState<string | undefined>(undefined);
+  const [afterId, setAfterId] = useState<string | undefined>(undefined);
+  const [exporting, setExporting] = useState(false);
+  const setError = useStatusStore((state) => state.setError);
+
+  const before = runs.find((run) => run.id === beforeId);
+  const after = runs.find((run) => run.id === afterId);
+
+  const handleExport = async () => {
+    if (!before || !after) return;
+    setExporting(true);
+    try {
+      const folder = await window.cassandraDesk.pickExportFolder();
+      if (!folder) return;
+      const { filePath } = await window.cassandraDesk.exportBenchmarkReport(folder, {
+        scenarioName: scenario.name,
+        before: { label: before.label ?? "Run A", ranAt: before.ranAt, steps: before.steps },
+        after: { label: after.label ?? "Run B", ranAt: after.ranAt, steps: after.steps },
+      });
+      await window.cassandraDesk.openFolder(filePath);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  if (runs.length < 2) {
+    return (
+      <p className="mt-4 border-t border-line-soft pt-3 text-[11.5px] text-muted">
+        Save at least two runs of this scenario to compare them.
+      </p>
+    );
+  }
+
+  return (
+    <div className="mt-4 border-t border-line-soft pt-3">
+      <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-subtle">Compare runs</h3>
+      <div className="mt-2 flex items-center gap-2">
+        <RunPicker label="Before" runs={runs} selectedId={beforeId} onSelect={setBeforeId} />
+        <RunPicker label="After" runs={runs} selectedId={afterId} onSelect={setAfterId} />
+        <Button variant="ghost" onClick={() => void handleExport()} disabled={!before || !after || exporting}>
+          {exporting ? "Exporting…" : "Export report"}
+        </Button>
+      </div>
+      {before && after ? <CompareTable before={before} after={after} /> : null}
+    </div>
+  );
+}
+
+function RunPicker({
+  label,
+  runs,
+  selectedId,
+  onSelect,
+}: {
+  label: string;
+  runs: BenchmarkRun[];
+  selectedId: string | undefined;
+  onSelect(id: string): void;
+}) {
+  return (
+    <Select value={selectedId ?? ""} onValueChange={onSelect}>
+      <SelectTrigger aria-label={`${label} run`}>
+        <SelectValue placeholder={`${label} run...`} />
+      </SelectTrigger>
+      <SelectContent>
+        {runs.map((run) => (
+          <SelectItem key={run.id} value={run.id}>
+            {run.label ?? "Unlabeled"} · {new Date(run.ranAt).toLocaleString()}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+function CompareTable({ before, after }: { before: BenchmarkRun; after: BenchmarkRun }) {
+  const stepCount = Math.max(before.steps.length, after.steps.length);
+  return (
+    <div className="mt-2 max-h-[240px] overflow-y-auto font-mono text-[11.5px]">
+      {Array.from({ length: stepCount }, (_, i) => {
+        const b = before.steps[i];
+        const a = after.steps[i];
+        if (!b || !a) {
+          return (
+            <div key={i} className="border-t border-line-soft/60 py-1 text-muted">
+              Step {i + 1}: no matching run
+            </div>
+          );
+        }
+        const avgDelta = deltaPercent(b.avgMs, a.avgMs);
+        const faster = avgDelta !== null && avgDelta < 0;
+        const regressed = avgDelta !== null && avgDelta > 0;
+        return (
+          <div key={i} className="border-t border-line-soft/60 py-1">
+            <div className="flex items-center justify-between gap-2 text-text/80">
+              <span className="truncate">
+                Step {i + 1} · {a.cql}
+              </span>
+              <span className={faster ? "text-success" : regressed ? "text-danger" : "text-muted"}>
+                avg {b.avgMs.toFixed(1)}ms → {a.avgMs.toFixed(1)}ms
+                {avgDelta !== null ? ` (${avgDelta > 0 ? "+" : ""}${avgDelta.toFixed(1)}%)` : ""}
+              </span>
+            </div>
+            <div className="text-muted">
+              p95 {b.p95Ms.toFixed(1)} → {a.p95Ms.toFixed(1)}ms · throughput {b.throughputOpsPerSec.toFixed(1)} →{" "}
+              {a.throughputOpsPerSec.toFixed(1)} ops/s · errors {b.errors} → {a.errors}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
