@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { Play, Plus, Trash2 } from "lucide-react";
+import { BenchmarkRunResult } from "../../../core/cassandra/benchmark";
 import { ProfileListItem } from "../../../core/ipc";
 import { Button } from "../../components/ui/Button";
 import {
@@ -11,14 +12,18 @@ import {
 import { Input } from "../../components/ui/Input";
 import { PanelHeader } from "../../components/ui/PanelHeader";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/Select";
-import { BenchmarkScenario, BenchmarkStep, useBenchmarkStore } from "../../store/benchmark";
+import { usePreferencesStore } from "../../store/preferences";
+import { BenchmarkRun, BenchmarkScenario, BenchmarkStep, resolveScenarioSteps, useBenchmarkStore } from "../../store/benchmark";
 import { useQueryHistoryStore } from "../../store/queryHistory";
+import { useStatusStore } from "../../store/status";
 
 export function BenchmarkPanel({ profile }: { profile: ProfileListItem }) {
   const scenarios = useBenchmarkStore((state) => state.scenarios);
   const createScenario = useBenchmarkStore((state) => state.createScenario);
   const renameScenario = useBenchmarkStore((state) => state.renameScenario);
   const deleteScenario = useBenchmarkStore((state) => state.deleteScenario);
+
+  const allRuns = useBenchmarkStore((state) => state.runs);
 
   const ownScenarios = useMemo(
     () => scenarios.filter((scenario) => scenario.profileId === undefined || scenario.profileId === profile.id),
@@ -53,6 +58,7 @@ export function BenchmarkPanel({ profile }: { profile: ProfileListItem }) {
           key={selected.id}
           scenario={selected}
           profile={profile}
+          runs={allRuns.filter((run) => run.scenarioId === selected.id)}
           onRename={(name) => renameScenario(selected.id, name)}
           onDelete={() => {
             deleteScenario(selected.id);
@@ -101,11 +107,13 @@ function ScenarioPicker({
 function ScenarioEditor({
   scenario,
   profile,
+  runs,
   onRename,
   onDelete,
 }: {
   scenario: BenchmarkScenario;
   profile: ProfileListItem;
+  runs: BenchmarkRun[];
   onRename(name: string): void;
   onDelete(): void;
 }) {
@@ -177,6 +185,8 @@ function ScenarioEditor({
           Add ad-hoc CQL step
         </Button>
       </div>
+
+      <RunControls scenario={scenario} profile={profile} runs={runs} />
     </div>
   );
 }
@@ -261,6 +271,135 @@ function StepRow({
           />
         </label>
       </div>
+    </div>
+  );
+}
+
+function RunControls({
+  scenario,
+  profile,
+  runs,
+}: {
+  scenario: BenchmarkScenario;
+  profile: ProfileListItem;
+  runs: BenchmarkRun[];
+}) {
+  const savedQueries = useQueryHistoryStore((state) => state.saved);
+  const queryMode = usePreferencesStore((state) => state.queryMode);
+  const recordRun = useBenchmarkStore((state) => state.recordRun);
+  const deleteRun = useBenchmarkStore((state) => state.deleteRun);
+  const setError = useStatusStore((state) => state.setError);
+
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState<{ index: number; total: number } | undefined>(undefined);
+  const [pendingResult, setPendingResult] = useState<BenchmarkRunResult | undefined>(undefined);
+  const [label, setLabel] = useState("");
+
+  const handleRun = async () => {
+    const resolved = resolveScenarioSteps(scenario, savedQueries);
+    const errorStep = resolved.find((step) => step.error);
+    if (errorStep) {
+      setError(errorStep.error!);
+      return;
+    }
+    if (resolved.length === 0) {
+      setError("Add at least one step before running the scenario.");
+      return;
+    }
+
+    setRunning(true);
+    setPendingResult(undefined);
+    setProgress({ index: 0, total: resolved.length });
+    const unsubscribe = window.cassandraDesk.onBenchmarkProgress((next) =>
+      setProgress({ index: next.index, total: next.total }),
+    );
+    try {
+      const result = await window.cassandraDesk.runBenchmark(
+        profile.id,
+        resolved.map(({ error, ...step }) => {
+          void error;
+          return step as { stepId: string; cql: string; repeat: number; concurrency: number };
+        }),
+        queryMode,
+      );
+      setPendingResult(result);
+      setLabel("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      unsubscribe();
+      setRunning(false);
+      setProgress(undefined);
+    }
+  };
+
+  const handleSaveRun = () => {
+    if (!pendingResult) return;
+    recordRun({
+      scenarioId: scenario.id,
+      profileId: profile.id,
+      ranAt: Date.now(),
+      totalDurationMs: pendingResult.totalDurationMs,
+      steps: pendingResult.steps,
+      ...(label.trim() ? { label: label.trim() } : {}),
+    });
+    setPendingResult(undefined);
+  };
+
+  return (
+    <div className="mt-4 border-t border-line-soft pt-3">
+      <Button variant="primary" onClick={() => void handleRun()} disabled={running}>
+        <Play size={12} strokeWidth={1.7} />
+        {running ? `Running${progress ? ` ${progress.index}/${progress.total}` : "…"}` : "Run scenario"}
+      </Button>
+
+      {pendingResult ? (
+        <div className="mt-3 grid gap-2 rounded-md border border-line-soft p-2">
+          <p className="text-[11.5px] text-muted">
+            Run finished in {pendingResult.totalDurationMs}ms. Give it a label (e.g. &quot;baseline — old
+            schema&quot;) and save it to compare later.
+          </p>
+          <div className="flex items-center gap-2">
+            <Input
+              value={label}
+              onChange={(event) => setLabel(event.target.value)}
+              placeholder="Label (optional)"
+              aria-label="Run label"
+              className="max-w-xs"
+            />
+            <Button variant="primary" onClick={handleSaveRun}>
+              Save run
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {runs.length > 0 ? (
+        <div className="mt-4">
+          <h3 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-subtle">Run history</h3>
+          <ul className="mt-1 grid gap-1">
+            {runs.map((run) => (
+              <li
+                key={run.id}
+                className="flex items-center justify-between gap-2 rounded-md border border-line-soft px-2 py-1.5 text-[11.5px]"
+              >
+                <span className="text-text">
+                  {run.label ?? "Unlabeled run"}{" "}
+                  <span className="text-subtle">· {new Date(run.ranAt).toLocaleString()}</span>
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Delete run ${run.label ?? run.id}`}
+                  className="text-subtle transition-colors hover:text-danger"
+                  onClick={() => deleteRun(run.id)}
+                >
+                  <Trash2 size={12} strokeWidth={1.7} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }
