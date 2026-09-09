@@ -28,13 +28,17 @@ const MigrationsPage = lazy(() =>
 const CqlEditor = lazy(() =>
   import("../../components/ui/cql-editor/CqlEditor").then((m) => ({ default: m.CqlEditor }))
 );
+const BenchmarkPanel = lazy(() =>
+  import("./BenchmarkPanel").then((m) => ({ default: m.BenchmarkPanel }))
+);
 
-export type ClusterTab = "cql" | "schema" | "migrations";
+export type ClusterTab = "cql" | "schema" | "migrations" | "benchmark";
 
 const TAB_OPTIONS: SegmentedOption<ClusterTab>[] = [
   { value: "cql", label: "CQL" },
   { value: "schema", label: "Schema" },
-  { value: "migrations", label: "Migrations" }
+  { value: "migrations", label: "Migrations" },
+  { value: "benchmark", label: "Benchmark" }
 ];
 
 export function ClusterWorkspace({
@@ -57,7 +61,13 @@ export function ClusterWorkspace({
   const activeTab = useLayoutStore((state) => state.activeTab);
   const setActiveTab = useLayoutStore((state) => state.setActiveTab);
   const tab: ClusterTab =
-    activeTab === "schema" ? "schema" : activeTab === "migrations" ? "migrations" : "cql";
+    activeTab === "schema"
+      ? "schema"
+      : activeTab === "migrations"
+        ? "migrations"
+        : activeTab === "benchmark"
+          ? "benchmark"
+          : "cql";
 
   return (
     <div className="grid min-h-0 flex-1 grid-cols-1">
@@ -90,6 +100,11 @@ export function ClusterWorkspace({
         </TabPanel>
         <TabPanel active={tab === "schema"}>
           <ClusterSchemaView profile={profile} />
+        </TabPanel>
+        <TabPanel active={tab === "benchmark"}>
+          <Suspense fallback={<div className="grid h-full place-items-center text-[11.5px] text-muted">Loading benchmark…</div>}>
+            <BenchmarkPanel profile={profile} />
+          </Suspense>
         </TabPanel>
       </section>
     </div>
