@@ -1,6 +1,11 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { BenchmarkStepResult } from "../../core/cassandra/benchmark";
+import {
+  BenchmarkRunOutcome,
+  BenchmarkStepResult,
+  deriveBenchmarkRunOutcome,
+} from "../../core/cassandra/benchmark";
+import { QueryMode } from "../../core/cassandra/query";
 
 export interface BenchmarkStep {
   id: string;
@@ -28,6 +33,10 @@ export interface BenchmarkRun {
   label?: string;
   totalDurationMs: number;
   steps: BenchmarkStepResult[];
+  /** Optional for legacy persisted runs that predate query-mode snapshots. */
+  queryMode?: QueryMode;
+  /** Derived from the attempted/successful execution counts when recorded. */
+  outcome?: BenchmarkRunOutcome;
 }
 
 interface BenchmarkState {
@@ -119,7 +128,11 @@ export const useBenchmarkStore = create<BenchmarkState & BenchmarkActions>()(
         })),
 
       recordRun: (run) => {
-        const next: BenchmarkRun = { id: crypto.randomUUID(), ...run };
+        const next: BenchmarkRun = {
+          id: crypto.randomUUID(),
+          ...run,
+          outcome: run.outcome ?? deriveBenchmarkRunOutcome(run),
+        };
         set((state) => ({ runs: [next, ...state.runs] }));
         return next;
       },

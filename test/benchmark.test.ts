@@ -48,7 +48,15 @@ describe("executeBenchmarkSteps", () => {
     expect(execute).toHaveBeenCalledTimes(5);
     expect(calls).toEqual(Array(5).fill("SELECT 1"));
     expect(result.steps).toHaveLength(1);
-    expect(result.steps[0]).toMatchObject({ stepId: "s1", executions: 5, errors: 0 });
+    expect(result.steps[0]).toMatchObject({
+      stepId: "s1",
+      repeat: 5,
+      concurrency: 2,
+      executions: 5,
+      successfulExecutions: 5,
+      errors: 0,
+    });
+    expect(result.outcome).toBe("completed");
   });
 
   it("counts individual execution failures without aborting the step", async () => {
@@ -60,7 +68,19 @@ describe("executeBenchmarkSteps", () => {
     const result = await executeBenchmarkSteps(execute, [
       { stepId: "s1", cql: "SELECT 1", repeat: 3, concurrency: 1 },
     ]);
-    expect(result.steps[0]).toMatchObject({ executions: 3, errors: 1 });
+    expect(result.steps[0]).toMatchObject({ executions: 3, errors: 1, repeat: 3, concurrency: 1 });
+    expect(result.outcome).toBe("completed_with_errors");
+  });
+
+  it("derives a failed outcome when every attempted execution fails", async () => {
+    const execute = vi.fn(async () => {
+      throw new Error("boom");
+    });
+    const result = await executeBenchmarkSteps(execute, [
+      { stepId: "s1", cql: "SELECT 1", repeat: 2, concurrency: 1 },
+    ]);
+    expect(result.steps[0]).toMatchObject({ executions: 2, successfulExecutions: 0, errors: 2 });
+    expect(result.outcome).toBe("failed");
   });
 
   it("calls onStep once per step, in order, with that step's result", async () => {

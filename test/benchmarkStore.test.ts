@@ -62,20 +62,71 @@ describe("benchmark store", () => {
       scenarioId: scenario.id,
       profileId: "p1",
       ranAt: 1,
+      queryMode: "read",
       label: "before",
       totalDurationMs: 10,
-      steps: [],
+      steps: [
+        {
+          stepId: "s1",
+          cql: "SELECT 1",
+          repeat: 3,
+          concurrency: 2,
+          executions: 3,
+          successfulExecutions: 3,
+          errors: 0,
+          minMs: 1,
+          avgMs: 1,
+          p50Ms: 1,
+          p95Ms: 1,
+          p99Ms: 1,
+          maxMs: 1,
+          throughputOpsPerSec: 3,
+        },
+      ],
     });
     useBenchmarkStore.getState().recordRun({
       scenarioId: scenario.id,
       profileId: "p1",
       ranAt: 2,
+      queryMode: "read",
       label: "after",
       totalDurationMs: 20,
       steps: [],
     });
     const { runs } = useBenchmarkStore.getState();
     expect(runs.map((r) => r.label)).toEqual(["after", "before"]);
+    expect(runs[1]).toMatchObject({ queryMode: "read", outcome: "completed" });
+  });
+
+  it("persists query mode and derives a completed-with-errors outcome", () => {
+    const scenario = useBenchmarkStore.getState().createScenario("s", "p1");
+    const run = useBenchmarkStore.getState().recordRun({
+      scenarioId: scenario.id,
+      profileId: "p1",
+      ranAt: 1,
+      queryMode: "write",
+      totalDurationMs: 10,
+      steps: [
+        {
+          stepId: "s1",
+          cql: "INSERT",
+          repeat: 4,
+          concurrency: 3,
+          executions: 4,
+          successfulExecutions: 3,
+          errors: 1,
+          minMs: 1,
+          avgMs: 1,
+          p50Ms: 1,
+          p95Ms: 1,
+          p99Ms: 1,
+          maxMs: 1,
+          throughputOpsPerSec: 3,
+        },
+      ],
+    });
+    expect(run).toMatchObject({ queryMode: "write", outcome: "completed_with_errors" });
+    expect(useBenchmarkStore.getState().runs[0]).toMatchObject({ queryMode: "write" });
   });
 });
 

@@ -21,7 +21,12 @@ export interface ResolvedBenchmarkStep {
 export interface BenchmarkStepResult {
   stepId: string;
   cql: string;
+  /** Effective settings used for this step; absent on legacy persisted runs. */
+  repeat?: number;
+  concurrency?: number;
   executions: number;
+  /** Successful executions represented by the latency metrics. */
+  successfulExecutions?: number;
   errors: number;
   minMs: number;
   avgMs: number;
@@ -35,7 +40,10 @@ export interface BenchmarkStepResult {
 export interface BenchmarkRunResult {
   totalDurationMs: number;
   steps: BenchmarkStepResult[];
+  outcome: BenchmarkRunOutcome;
 }
+
+export type BenchmarkRunOutcome = "completed" | "completed_with_errors" | "failed";
 
 /** Nearest-rank percentile over an already-sorted ascending array. */
 function percentile(sorted: number[], p: number): number {
@@ -50,13 +58,18 @@ export function computeStepMetrics(
   durationsMs: number[],
   errors: number,
   wallMs: number,
+  repeat?: number,
+  concurrency?: number,
 ): BenchmarkStepResult {
   const sorted = [...durationsMs].sort((a, b) => a - b);
   const sum = sorted.reduce((total, value) => total + value, 0);
   return {
     stepId,
     cql,
+    ...(repeat === undefined ? {} : { repeat }),
+    ...(concurrency === undefined ? {} : { concurrency }),
     executions: sorted.length + errors,
+    successfulExecutions: sorted.length,
     errors,
     minMs: sorted[0] ?? 0,
     avgMs: sorted.length > 0 ? sum / sorted.length : 0,
@@ -66,6 +79,27 @@ export function computeStepMetrics(
     maxMs: sorted[sorted.length - 1] ?? 0,
     throughputOpsPerSec: wallMs > 0 ? (sorted.length / wallMs) * 1000 : 0,
   };
+}
+
+/** Derives a run outcome from attempted and successful executions. */
+export function deriveBenchmarkRunOutcome(
+  run: Pick<BenchmarkRunResult, "steps">,
+): BenchmarkRunOutcome {
+  if (run.steps.length === 0) return "failed";
+
+  const hasUnattemptedStep = run.steps.some(
+    (step) => step.repeat !== undefined && step.executions < step.repeat,
+  );
+  if (hasUnattemptedStep) return "failed";
+
+  const successful = run.steps.reduce(
+    (total, step) => total + (step.successfulExecutions ?? step.executions - step.errors),
+    0,
+  );
+  if (successful <= 0) return "failed";
+
+  const errors = run.steps.reduce((total, step) => total + step.errors, 0);
+  return errors > 0 ? "completed_with_errors" : "completed";
 }
 
 /**
@@ -119,10 +153,19 @@ export async function executeBenchmarkSteps(
       step.repeat,
       step.concurrency,
     );
-    const result = computeStepMetrics(step.stepId, step.cql, durationsMs, errors, Date.now() - stepStarted);
+    const result = computeStepMetrics(
+      step.stepId,
+      step.cql,
+      durationsMs,
+      errors,
+      Date.now() - stepStarted,
+      step.repeat,
+      step.concurrency,
+    );
     results.push(result);
     onStep?.(result);
   }
 
-  return { totalDurationMs: Date.now() - started, steps: results };
+  const run = { totalDurationMs: Date.now() - started, steps: results };
+  return { ...run, outcome: deriveBenchmarkRunOutcome(run) };
 }

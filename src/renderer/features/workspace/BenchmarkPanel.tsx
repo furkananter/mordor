@@ -1,7 +1,11 @@
 import { useMemo, useState } from "react";
 import { Play, Plus, Trash2 } from "lucide-react";
 import { BenchmarkRunResult } from "../../../core/cassandra/benchmark";
-import { deltaPercent } from "../../../core/cassandra/benchmarkReport";
+import {
+  BenchmarkReportRun,
+  BenchmarkStepComparison,
+  compareBenchmarkRuns,
+} from "../../../core/cassandra/benchmarkReport";
 import { ProfileListItem } from "../../../core/ipc";
 import { Button } from "../../components/ui/Button";
 import {
@@ -399,6 +403,8 @@ function RunControls({
       ranAt: Date.now(),
       totalDurationMs: pendingResult.totalDurationMs,
       steps: pendingResult.steps,
+      queryMode,
+      outcome: pendingResult.outcome,
       ...(label.trim() ? { label: label.trim() } : {}),
     });
     setPendingResult(undefined);
@@ -479,8 +485,8 @@ function CompareView({ scenario, runs }: { scenario: BenchmarkScenario; runs: Be
       if (!folder) return;
       const { filePath } = await window.cassandraDesk.exportBenchmarkReport(folder, {
         scenarioName: scenario.name,
-        before: { label: before.label ?? "Run A", ranAt: before.ranAt, steps: before.steps },
-        after: { label: after.label ?? "Run B", ranAt: after.ranAt, steps: after.steps },
+        before: toReportRun(before),
+        after: toReportRun(after),
       });
       await window.cassandraDesk.openFolder(filePath);
     } catch (caught) {
@@ -541,31 +547,56 @@ function RunPicker({
 }
 
 function CompareTable({ before, after }: { before: BenchmarkRun; after: BenchmarkRun }) {
-  const stepCount = Math.max(before.steps.length, after.steps.length);
+  const comparison = compareBenchmarkRuns({
+    scenarioName: "",
+    before: toReportRun(before),
+    after: toReportRun(after),
+  });
   return (
-    <div className="mt-2 max-h-[240px] overflow-y-auto font-mono text-[11.5px]">
-      {Array.from({ length: stepCount }, (_, i) => {
-        const b = before.steps[i];
-        const a = after.steps[i];
+    <div className="mt-2">
+      <div className="rounded-md border border-line-soft px-2 py-1.5 text-[11.5px]">
+        <div className={comparison.eligibility.status === "incompatible" ? "text-danger" : comparison.eligibility.status === "unverified" ? "text-warning" : "text-success"}>
+          Comparison {comparison.eligibility.status}
+        </div>
+        <div className="text-muted">
+          Before: {formatRunOutcome(comparison.beforeOutcome)} · After: {formatRunOutcome(comparison.afterOutcome)}
+        </div>
+        {comparison.eligibility.reasons.length > 0 ? (
+          <div className="mt-1 text-muted">{comparison.eligibility.reasons.join(" ")}</div>
+        ) : null}
+      </div>
+      <div className="mt-2 max-h-[240px] overflow-y-auto font-mono text-[11.5px]">
+      {comparison.steps.map((stepComparison, i) => {
+        const b = stepComparison.before;
+        const a = stepComparison.after;
         if (!b || !a) {
+          const cql = a?.cql ?? b?.cql ?? "";
           return (
-            <div key={i} className="border-t border-line-soft/60 py-1 text-muted">
-              Step {i + 1}: no matching run
+            <div key={stepComparison.stepId} className="border-t border-line-soft/60 py-1 text-muted">
+              Step {i + 1} · {stepComparison.stepId} · {cql}: no matching run
             </div>
           );
         }
-        const avgDelta = deltaPercent(b.avgMs, a.avgMs);
-        const faster = avgDelta !== null && avgDelta < 0;
-        const regressed = avgDelta !== null && avgDelta > 0;
+        const verdictLabel = formatStepVerdict(stepComparison);
+        const verdictClass = stepComparison.verdict === "faster"
+          ? "text-success"
+          : stepComparison.verdict === "regressed"
+            ? "text-danger"
+            : "text-muted";
+        const avgDelta = stepComparison.avgDeltaPercent;
+        const workloadLabel = stepComparison.kind === "changed_workload"
+          ? `before: ${b.cql} → after: ${a.cql} · changed workload`
+          : a.cql;
         return (
-          <div key={i} className="border-t border-line-soft/60 py-1">
+          <div key={stepComparison.stepId} className="border-t border-line-soft/60 py-1">
             <div className="flex items-center justify-between gap-2 text-text/80">
               <span className="truncate">
-                Step {i + 1} · {a.cql}
+                Step {i + 1} · {workloadLabel}
               </span>
-              <span className={faster ? "text-success" : regressed ? "text-danger" : "text-muted"}>
+              <span className={verdictClass}>
                 avg {b.avgMs.toFixed(1)}ms → {a.avgMs.toFixed(1)}ms
-                {avgDelta !== null ? ` (${avgDelta > 0 ? "+" : ""}${avgDelta.toFixed(1)}%)` : ""}
+                {avgDelta !== null ? ` (${avgDelta > 0 ? "+" : ""}${avgDelta.toFixed(1)}%)` : " (n/a)"}
+                {verdictLabel ? ` · ${verdictLabel}` : ""}
               </span>
             </div>
             <div className="text-muted">
@@ -575,6 +606,27 @@ function CompareTable({ before, after }: { before: BenchmarkRun; after: Benchmar
           </div>
         );
       })}
+      </div>
     </div>
   );
+}
+
+function toReportRun(run: BenchmarkRun): BenchmarkReportRun {
+  return {
+    label: run.label ?? "Unlabeled run",
+    ranAt: run.ranAt,
+    profileId: run.profileId,
+    steps: run.steps,
+    ...(run.queryMode === undefined ? {} : { queryMode: run.queryMode }),
+    ...(run.outcome === undefined ? {} : { outcome: run.outcome }),
+  };
+}
+
+function formatRunOutcome(outcome: "completed" | "completed_with_errors" | "failed"): string {
+  return outcome.replaceAll("_", " ");
+}
+
+function formatStepVerdict(comparison: BenchmarkStepComparison): string {
+  if (comparison.verdict === "unverified") return "unverified";
+  return comparison.verdict;
 }
