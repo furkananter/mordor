@@ -15,7 +15,16 @@ const shared = {
   // (we hit this with Cassandra wrapper types and UUID columns rendered as
   // `{"buffer":"0x..."}`). The bundle size cost is < 2 KB.
   keepNames: !isWatchMode,
-  external: ["electron", "keytar", "node-pty"],
+  // `ssh2` joins the native-module externals for the same reason keytar and
+  // node-pty are here: it `require()`s prebuilt `.node` binaries
+  // (ssh2's own sshcrypto.node, plus its optional cpu-features dep). esbuild
+  // has no loader for those, so bundling ssh2 fails the build outright on any
+  // machine where those optional natives actually compiled — it only appeared
+  // to work where they were missing, since esbuild downgrades an unresolvable
+  // require() to a warning. Left external, ssh2 resolves from node_modules at
+  // runtime (electron-builder ships production deps) and gets to use its
+  // native crypto instead of the pure-JS fallback.
+  external: ["electron", "keytar", "node-pty", "ssh2"],
   // Bake whether this build is Developer-ID signed into the main bundle. CI's
   // release job exposes CSC_LINK (the signing cert) to this build step, so its
   // presence is a reliable signal that electron-builder will sign + notarize.

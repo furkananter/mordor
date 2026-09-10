@@ -52,7 +52,13 @@ const api: CassandraDeskApi = {
   // specific assertions live in the pure-function tests under `test/`.
   pickExportFolder: vi.fn(() => Promise.resolve(undefined)),
   exportDatabase: vi.fn(),
-  openFolder: vi.fn(() => Promise.resolve())
+  openFolder: vi.fn(() => Promise.resolve()),
+  // Benchmark feature — no-op mocks satisfy the CassandraDeskApi interface so
+  // tsc doesn't reject this file before the renderer ever mounts. Benchmark-
+  // specific assertions live in the engine/report/store unit tests.
+  runBenchmark: vi.fn(),
+  onBenchmarkProgress: vi.fn(() => () => undefined),
+  exportBenchmarkReport: vi.fn()
 };
 
 const profile = {

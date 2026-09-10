@@ -16,6 +16,8 @@ import {
   TableSchemaPayload,
 } from "./shared/messages";
 import { LocalDiscoveryResult } from "./cassandra/localDiscovery";
+import { BenchmarkRunResult, ResolvedBenchmarkStep } from "./cassandra/benchmark";
+import { BenchmarkComparisonInput } from "./cassandra/benchmarkReport";
 import { ExportRequest, ExportResult } from "./export/types";
 
 // Re-export so renderer code can import types from a single `core/ipc` module
@@ -205,6 +207,20 @@ export interface CassandraDeskApi {
   ): Promise<{ updated: number }>;
   getTableDdl(table: TableIdentity): Promise<string>;
   runSchemaScript(profileId: string, cql: string): Promise<SchemaScriptResult>;
+  runBenchmark(
+    profileId: string,
+    steps: ResolvedBenchmarkStep[],
+    mode: "read" | "write" | "all",
+  ): Promise<BenchmarkRunResult>;
+  /** Subscribe to live per-step progress pushed while a benchmark run is in flight. */
+  onBenchmarkProgress(
+    callback: (progress: { stepId: string; index: number; total: number }) => void,
+  ): () => void;
+  /** Writes the before/after comparison Markdown into `outputDir`; returns the file it wrote. */
+  exportBenchmarkReport(
+    outputDir: string,
+    report: BenchmarkComparisonInput,
+  ): Promise<{ filePath: string }>;
   pickMigrationsFolder(): Promise<string | undefined>;
   listMigrations(profileId: string, keyspace: string, folder: string): Promise<MigrationListPayload>;
   previewMigration(folder: string, version: string): Promise<MigrationPreview>;
@@ -280,6 +296,8 @@ export const ipcChannels = {
   updateTableRow: "table:update-row",
   getTableDdl: "table:get-ddl",
   runSchemaScript: "schema:run-script",
+  runBenchmark: "benchmark:run",
+  exportBenchmarkReport: "benchmark:export-report",
   pickMigrationsFolder: "migrations:pick-folder",
   listMigrations: "migrations:list",
   previewMigration: "migrations:preview",

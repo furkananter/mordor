@@ -32,6 +32,7 @@ function driverSync(): typeof cassandra {
 import { ConnectionProfileWithPassword } from "../config/profile";
 import type { SshTunnelManager } from "../db/sshTunnel";
 import { buildCqlPreviewClause, buildTablePreviewQuery, previewLimit, quoteIdentifier } from "./cql";
+import { BenchmarkRunResult, BenchmarkStepResult, executeBenchmarkSteps, ResolvedBenchmarkStep } from "./benchmark";
 import { splitCqlStatements } from "./cqlSplit";
 import { isSchemaChange, waitForSchemaAgreement } from "./migrations/MigrationExecutor";
 import { normalizeQuery, QueryMode } from "./query";
@@ -594,6 +595,28 @@ export class CassandraService {
       rows: serializeRows(rawRows),
       limit: normalized.limit,
     };
+  }
+
+  /**
+   * Runs a resolved benchmark scenario against the already-connected client
+   * for `profileId`. Each step's CQL is passed through `normalizeQuery` (same
+   * read/write/all gate the CQL console uses) before every execution, so a
+   * benchmark scenario can't run destructive DML/DDL unless the user has
+   * switched query mode. `onStep` fires once per step, in order, right after
+   * that step finishes — the IPC handler uses it to push live progress.
+   */
+  async runBenchmarkScenario(
+    profileId: string,
+    steps: ResolvedBenchmarkStep[],
+    mode: QueryMode = "read",
+    onStep?: (result: BenchmarkStepResult) => void,
+  ): Promise<BenchmarkRunResult> {
+    const existing = this.requireConnection(profileId);
+    const execute = async (cql: string) => {
+      const normalized = normalizeQuery(cql, mode);
+      await existing.client.execute(normalized.cql, [], { prepare: true });
+    };
+    return executeBenchmarkSteps(execute, steps, onStep);
   }
 
   /**

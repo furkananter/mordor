@@ -1,10 +1,10 @@
 import { SegmentedControl, SegmentedOption } from "../../components/ui/SegmentedControl";
 
-// Note: "migrations" is intentionally kept in the union for back-compat with the
-// persisted layout store, but it is no longer offered at the table level — the
-// Migrations tab lives at the cluster level since migrations apply to keyspaces,
-// not individual tables.
-export type WorkspaceTab = "data" | "schema" | "cql" | "migrations";
+// "migrations" and "benchmark" are intentionally kept in this union for the
+// persisted layout store even though neither is offered at the table level —
+// both live at the cluster level (migrations apply to keyspaces, benchmarks
+// run scenarios cluster-wide, neither is scoped to one table).
+export type WorkspaceTab = "data" | "schema" | "cql" | "migrations" | "benchmark";
 
 export function WorkspaceTabs({
   activeTab,
